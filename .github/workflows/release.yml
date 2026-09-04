@@ -44,6 +44,14 @@
 # only `subject-path` (no sbom-path/predicate-type/predicate/predicate-path/
 # push-to-registry), which invokes the action's native build-provenance mode.
 # The SBOM call supplies `subject-path` + `sbom-path` (no custom predicate).
+#
+# NOTE on release notes: RELEASE_NOTES_0.1.0a1.md is release-control-plane
+# content, not product content, so it is correctly ABSENT from the frozen
+# product checkout (refs/tags/v0.1.0a1 -> 2ad880bf9bb416e1b047666c764d079d1738b5bd).
+# It is read instead from one exact, immutable release-control commit
+# (9ba2f5e281d1963e449523249407b4ed1aa57a71) via `git show <sha>:<path>`,
+# materialized into $RUNNER_TEMP -- never from main/HEAD/origin/main/
+# github.sha/latest branch state.
 
 name: Release
 
@@ -357,6 +365,39 @@ jobs:
             dist/nature_agent_validator-0.1.0a1.tar.gz
           sbom-path: dist/nature-agent-validator-0.1.0a1.spdx.json
 
+      - name: Materialize release notes from the immutable release-control commit
+        # The frozen product checkout above is refs/tags/v0.1.0a1 ->
+        # 2ad880bf9bb416e1b047666c764d079d1738b5bd. RELEASE_NOTES_0.1.0a1.md
+        # was introduced later, in the release-control commit below, so it is
+        # correctly ABSENT from that frozen product tree -- it must never be
+        # read from there. It is also never read from main, HEAD,
+        # origin/main, github.sha, or any other "latest branch state"; the
+        # only source is this one exact, immutable commit.
+        run: |
+          set -euo pipefail
+          RELEASE_CONTROL_COMMIT="9ba2f5e281d1963e449523249407b4ed1aa57a71"
+          NOTES_FILE="$RUNNER_TEMP/RELEASE_NOTES_0.1.0a1.md"
+
+          git cat-file -e "${RELEASE_CONTROL_COMMIT}^{commit}"
+
+          git show "${RELEASE_CONTROL_COMMIT}:RELEASE_NOTES_0.1.0a1.md" > "$NOTES_FILE"
+          test -s "$NOTES_FILE"
+
+          # Integrity guard: the blob id recorded in the release-control
+          # commit's tree (git plumbing, no working tree involved) must equal
+          # the blob id of the bytes we just extracted. Both are derived
+          # solely from the same immutable commit object graph -- no new,
+          # mutable source is introduced.
+          tree_blob="$(git rev-parse "${RELEASE_CONTROL_COMMIT}:RELEASE_NOTES_0.1.0a1.md")"
+          extracted_blob="$(git hash-object "$NOTES_FILE")"
+          if [ "$tree_blob" != "$extracted_blob" ]; then
+            echo "::error::extracted release notes (blob $extracted_blob) do not match the blob recorded in commit ${RELEASE_CONTROL_COMMIT} ($tree_blob)"
+            exit 1
+          fi
+
+          echo "release notes materialized from ${RELEASE_CONTROL_COMMIT} (blob $tree_blob) -- head:"
+          head -n 5 "$NOTES_FILE"
+
       - name: Refuse to overwrite an existing release (fail closed)
         run: |
           set -euo pipefail
@@ -368,7 +409,8 @@ jobs:
 
       - name: Create the draft GitHub Pre-release with the exact attested files
         # No rebuild between attestation and upload: these are the same
-        # dist/ files the previous two steps just attested.
+        # dist/ files the previous steps just attested. Release notes come
+        # from the immutable release-control commit materialized above.
         run: |
           set -euo pipefail
           gh release create v0.1.0a1 \
@@ -376,7 +418,7 @@ jobs:
             --target 2ad880bf9bb416e1b047666c764d079d1738b5bd \
             --verify-tag \
             --title "NATURE Agent Validator 0.1.0a1" \
-            --notes-file RELEASE_NOTES_0.1.0a1.md \
+            --notes-file "$RUNNER_TEMP/RELEASE_NOTES_0.1.0a1.md" \
             --prerelease \
             --draft \
             dist/nature_agent_validator-0.1.0a1-py3-none-any.whl \
