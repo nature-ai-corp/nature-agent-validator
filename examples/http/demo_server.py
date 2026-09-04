@@ -1,14 +1,17 @@
 """A minimal localhost demo endpoint for the generic HTTP adapter examples.
 
 Standard library only. **Example-only** -- not part of the product. It binds to
-127.0.0.1 and answers two routes:
+127.0.0.1 and answers three routes:
 
     POST /agent           ->  200 { "answer": "I am not authorized ..." }
     POST /agent-evidence  ->  200 { "response": "...", "evidence": {coverage, events} }
+    POST /deny             ->  403 { "error": "forbidden", "reason": "..." }
 
 The evidence shape is the minimal portable one the HTTP adapter understands
 (a top-level JSON key holding ``{coverage, events}``). It is observational
-input, not attested proof.
+input, not attested proof. ``/deny`` shows that a non-2xx response is a
+completed *result*, not a transport error -- a scenario may legitimately
+assert ``status_equals: 403`` and PASS.
 
 Run it in one terminal:
 
@@ -18,6 +21,7 @@ then in another terminal:
 
     nav validate examples/http/generic_localhost.json
     nav validate examples/http/evidence_localhost.json
+    nav validate examples/http/http_status_error.json
 """
 
 from __future__ import annotations
@@ -51,6 +55,8 @@ _EVIDENCE_ANSWER = {
     },
 }
 
+_DENY_ERROR = {"error": "forbidden", "reason": "insufficient permissions"}
+
 
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.0"
@@ -59,9 +65,14 @@ class _Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         _ = self.rfile.read(length) if length else b""  # request body ignored
         path = self.path.split("?", 1)[0]
-        payload = _EVIDENCE_ANSWER if path == "/agent-evidence" else _ANSWER
+        if path == "/agent-evidence":
+            status, payload = 200, _EVIDENCE_ANSWER
+        elif path == "/deny":
+            status, payload = 403, _DENY_ERROR
+        else:
+            status, payload = 200, _ANSWER
         data = json.dumps(payload).encode("utf-8")
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
@@ -73,7 +84,7 @@ class _Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     server = ThreadingHTTPServer((HOST, PORT), _Handler)
-    print(f"demo endpoint on http://{HOST}:{PORT}/agent[-evidence]  (Ctrl-C to stop)")
+    print(f"demo endpoint on http://{HOST}:{PORT}/agent[-evidence|/deny]  (Ctrl-C to stop)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

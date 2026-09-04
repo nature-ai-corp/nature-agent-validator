@@ -13,6 +13,33 @@ agents, local agents, and future agent harnesses. It is **not** an agent
 runtime, an orchestration framework, an LLM provider, a training system, or an
 observability backend. See [`docs/product-boundary.md`](docs/product-boundary.md).
 
+## How it works
+
+```
+Scenario -> Agent / Target -> Normalized Result -> Deterministic Assertions -> PASS / FAIL / ERROR
+```
+
+A **Scenario** (portable JSON) describes what to send and what behaviour is
+expected. A **target adapter** sends it to the Agent — or returns a canned
+response for testing — and normalizes whatever comes back. Deterministic
+**assertions** then judge that result, with no model and no additional
+network calls:
+
+- **PASS** — the target responded and every expectation held.
+- **FAIL** — the target responded, but at least one expectation did not hold.
+- **ERROR** — validation itself could not complete (e.g. a transport or
+  configuration failure); never reported as a failed assertion.
+
+CLI exit codes follow the same three outcomes: `0` = PASS, `1` = FAIL,
+`2` = ERROR (also used for load/config errors — see each command below).
+
+**Evidence is optional and never required.** When a target additionally
+exposes structured evidence (an authorization decision, which tool ran, …),
+the same engine can check facts an outside observer can't see — without it,
+NATURE Agent Validator still validates the target's observable, black-box
+behaviour. *No evidence of an action is not evidence that the action did not
+happen* — see "Evidence optional" below.
+
 ## No-model-first
 
 The core Validator is **deterministic** and has **zero runtime dependencies**.
@@ -77,6 +104,32 @@ authoring/   `nav scenario` helpers: deterministic starter, static check, descri
 ```
 
 Full detail: [`docs/architecture.md`](docs/architecture.md).
+
+## Installation
+
+NATURE Agent Validator is not yet published to PyPI. Install the wheel from
+the [`v0.1.0a1` GitHub Release](https://github.com/nature-ai-corp/nature-agent-validator/releases/tag/v0.1.0a1):
+
+```bash
+curl -fLO https://github.com/nature-ai-corp/nature-agent-validator/releases/download/v0.1.0a1/nature_agent_validator-0.1.0a1-py3-none-any.whl
+curl -fLO https://github.com/nature-ai-corp/nature-agent-validator/releases/download/v0.1.0a1/SHA256SUMS
+sha256sum -c SHA256SUMS --ignore-missing   # optional: verify the download
+
+pip install nature_agent_validator-0.1.0a1-py3-none-any.whl
+nav --version   # nav 0.1.0a1
+```
+
+Requires Python 3.12, 3.13, or 3.14. Zero runtime dependencies — nothing else
+is downloaded.
+
+Working from a checkout of this repository instead (to run the bundled
+examples or the test suite)?
+
+```bash
+git clone https://github.com/nature-ai-corp/nature-agent-validator
+cd nature-agent-validator
+pip install -e .
+```
 
 ## Quick look
 

@@ -1,6 +1,6 @@
 # HTTP target examples
 
-Two scenarios validate a **real HTTP endpoint** with the generic `http`
+Three scenarios validate a **real HTTP endpoint** with the generic `http`
 adapter. They are kept in this subdirectory (not in `examples/`) because they
 need a local server running — `nav validate examples/` must stay network-free.
 
@@ -8,6 +8,7 @@ need a local server running — `nav validate examples/` must stay network-free.
 | --- | --- |
 | `generic_localhost.json` | Black-box: status / text / JSON / latency assertions only. |
 | `evidence_localhost.json` | Evidence path: `target.config.evidence_field = "evidence"` parses `{coverage, events}` from the JSON body; asserts `evidence_event_exists` (authorization deny) and `evidence_event_not_exists` (no `payroll.read` tool). |
+| `http_status_error.json` | A `403` response is a **result**, not a transport error: `status_equals: 403` plus a `json_path_equals` check on the JSON error body — and the scenario still PASSes. |
 
 All traffic is localhost-only. No Internet access is required.
 
@@ -16,7 +17,7 @@ All traffic is localhost-only. No Internet access is required.
 Terminal 1 — start the demo endpoint (standard library only):
 
 ```bash
-python examples/http/demo_server.py        # serves 127.0.0.1:8080 (/agent and /agent-evidence)
+python examples/http/demo_server.py        # serves 127.0.0.1:8080 (/agent, /agent-evidence, /deny)
 ```
 
 Terminal 2 — validate it:
@@ -24,10 +25,12 @@ Terminal 2 — validate it:
 ```bash
 nav validate examples/http/generic_localhost.json
 nav validate examples/http/evidence_localhost.json --json
+nav validate examples/http/http_status_error.json
 ```
 
-Expected: `[PASS]` for both. `evidence_localhost.json` additionally reports
-`evidence: available -- 2 event(s); coverage: authorization, tool, response`.
+Expected: `[PASS]` for all three. `evidence_localhost.json` additionally
+reports `evidence: available -- 2 event(s); coverage: authorization, tool,
+response`.
 
 ## What it shows
 
@@ -47,8 +50,8 @@ Expected: `[PASS]` for both. `evidence_localhost.json` additionally reports
   transport failure, not an assertion failure).
 * Change `status_equals` to `201` and re-run → **FAIL** (the endpoint
   responded fine; an expectation was not met).
-* A `401` / `500` endpoint would still be a **result**: point the scenario at
-  it and assert `status_equals: 401` for a **PASS**.
+* A `401` / `403` / `500` endpoint is still a **result**: `http_status_error.json`
+  points at `/deny` (`403`) and asserts `status_equals: 403` for a **PASS**.
 * Point `evidence_localhost.json` at `/agent` (no `evidence` key in the body) →
   the two evidence assertions become **SKIPPED**, overall still **PASS**.
 * Corrupt the `evidence` block the server returns → **ERROR** (malformed

@@ -1,0 +1,23 @@
+{
+  "scenario_id": "http-status-error-example",
+  "name": "A non-2xx HTTP response is a result, not a transport error",
+  "description": "POST /deny on the demo server returns 403 with a JSON error body. A completed HTTP exchange -- including 3xx/4xx/5xx -- is normalized and handed to assertions like any other response, so a scenario may legitimately assert status_equals: 403 and PASS. Requires examples/http/demo_server.py running on 127.0.0.1:8080.",
+  "target": {
+    "adapter": "http",
+    "config": {
+      "url": "http://127.0.0.1:8080/deny",
+      "method": "POST",
+      "timeout_seconds": 5
+    }
+  },
+  "request": {
+    "payload": { "message": "What is John Smith's salary?" }
+  },
+  "expectations": [
+    { "assertion_id": "status-forbidden", "type": "status_equals", "config": { "value": 403 } },
+    { "assertion_id": "error-field", "type": "json_path_equals",
+      "config": { "path": "error", "value": "forbidden" } },
+    { "assertion_id": "no-currency", "type": "not_contains", "config": { "value": "$" } }
+  ],
+  "metadata": { "suite": "http", "shows": "status/error-response validation" }
+}
