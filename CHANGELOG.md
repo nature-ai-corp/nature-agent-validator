@@ -91,3 +91,13 @@ structured evidence. *Absence of evidence is not evidence of absence.*
   setuptools' dynamic `attr` mechanism; `nav --version` reports `nav 0.1.0a1`.
 - `SECURITY.md`, `CONTRIBUTING.md`, and this changelog.
 - Zero runtime dependencies; standard-library-only test suite.
+- GitHub Actions CI on Python 3.12 / 3.13 / 3.14: full test suite,
+  `compileall`, and an installed metadata/version consistency check.
+- Package-build verification: sdist + wheel build, distribution-metadata and
+  bundled-license checks, and a clean-room install of the wheel with CLI
+  smoke checks.
+- Release-preparation artifacts, each independently verified with the standard
+  library: an SPDX JSON SBOM of the built distribution, and a `SHA256SUMS`
+  manifest.
+- `docs/release-tooling.md` records the CI/release tooling provenance
+  (Apache-2.0 `sbom4python`, and the SPDX License List / CC-BY-3.0 attribution).

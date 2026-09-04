@@ -1,8 +1,8 @@
 # Security Policy
 
-NATURE Agent Validator is in **Alpha preparation** ahead of its first public
-open-source release. Interfaces, the scenario format, and behaviour may still
-change. We take security issues seriously.
+NATURE Agent Validator is at an early **Alpha** stage (`0.1.0a1`). Interfaces,
+the scenario format, and behaviour may still change. We take security issues
+seriously.
 
 ## Supported versions
 
@@ -16,21 +16,20 @@ against the current development line and included in the next pre-release.
 
 ## Reporting a vulnerability
 
-**Do not disclose suspected vulnerabilities publicly.** Do not open a public
-issue, pull request, or discussion describing an unfixed vulnerability.
+Report suspected vulnerabilities **privately**. Do not open a public issue,
+pull request, or discussion for an unfixed vulnerability, and do not publish,
+share, or demonstrate the details.
 
-At this stage the project repository is not yet public and no private
-vulnerability reporting channel is available yet:
+Where to report:
 
-- **Now (pre-release):** there is no reporting mechanism you can use yet. If
-  you have discovered a potential issue, please hold the details privately and
-  do not publish, share, or demonstrate them. Once the reporting channel below
-  is enabled you can submit your findings through it.
-- **After the public OSS release:** the released public repository will enable
-  **GitHub Private Vulnerability Reporting** (the "Report a vulnerability"
-  button under the repository's **Security** tab / Security Advisories). That
-  will be the authorized channel for private reports, keeping them confidential
-  to the maintainers until a coordinated fix is available.
+- If this repository has **GitHub Private Vulnerability Reporting** enabled,
+  use it: the **Security** tab -> *"Report a vulnerability"* (Security
+  Advisories). That is the authorized private channel; reports stay
+  confidential to the maintainers until a coordinated fix is available.
+- If private reporting is not available to you -- for example the repository is
+  not yet public, or the feature is not enabled -- do **not** disclose the
+  issue publicly. Hold the details privately until the channel above is
+  available, then submit them there.
 
 This project does not publish a dedicated security contact email address.
 

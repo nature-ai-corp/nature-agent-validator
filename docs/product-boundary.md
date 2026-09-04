@@ -29,7 +29,7 @@ the principles the Phase 0 architecture is built to protect.
 - No code is copied from the NATURE Enterprise AI Platform or other
   proprietary internal architecture.
 - This project is never wired into the Enterprise AI Platform codebase.
-- No DeepSeek Harness integration, no external model integration, no
+- No third-party agent-harness integration, no external model integration, no
   production integration exists in Phase 0.
 - The repository is intended for a future public OSS release; until OSS review,
   no third-party package is added and no license is claimed.

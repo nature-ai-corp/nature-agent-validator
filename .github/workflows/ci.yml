@@ -198,30 +198,33 @@ jobs:
           def norm(value):
               return (value or "").strip().lower().replace("_", "-")
 
-          names = {norm(p.get("name")) for p in packages}
-          assert "nature-agent-validator" in names, f"NATURE package absent; packages={sorted(names)}"
+          names = sorted(norm(p.get("name")) for p in packages)
 
+          # Strict positive allowlist -- NOT a denylist. NATURE Agent Validator
+          # has zero runtime dependencies, so the product SBOM must describe
+          # ONLY the NATURE distribution. Any other package -- CI/build/SBOM
+          # tooling, an interpreter/platform entry, or anything unforeseen --
+          # fails this job and forces a human to inspect the SBOM before this
+          # set is widened. The generated SBOM is never filtered, edited, or
+          # sanitised: generator -> inspect -> fail closed.
+          ALLOWED_PACKAGE_NAMES = frozenset({"nature-agent-validator"})
+
+          unexpected = sorted(set(names) - ALLOWED_PACKAGE_NAMES)
+          assert not unexpected, (
+              f"SBOM contains package(s) outside the allowlist "
+              f"{sorted(ALLOWED_PACKAGE_NAMES)}: {unexpected}. The product SBOM must "
+              "describe only the NATURE distribution (zero runtime dependencies). "
+              "Do not filter the SBOM -- investigate why the generator emitted these "
+              "and, only if legitimate, add the exact name to ALLOWED_PACKAGE_NAMES "
+              "after review."
+          )
+
+          # NATURE identity within the (now allowlist-clean) SBOM.
+          assert "nature-agent-validator" in set(names), f"NATURE package absent; packages={names}"
           nav = next(p for p in packages if norm(p.get("name")) == "nature-agent-validator")
           assert nav.get("versionInfo") == "0.1.0a1", f"NATURE versionInfo={nav.get('versionInfo')!r}"
 
-          # CI / build / SBOM tooling must NOT be represented as NATURE runtime
-          # components. This asserts the clean semantic result -- it does not
-          # filter or rewrite the SBOM.
-          contaminants = {
-              "build", "pyproject-hooks", "pyproject-api",
-              "sbom4python", "lib4sbom", "lib4package", "lib4vex",
-              "pip", "setuptools", "wheel", "packaging",
-              "requests", "urllib3", "certifi", "idna", "charset-normalizer",
-              "semantic-version", "defusedxml", "rich", "pygments",
-              "markdown-it-py", "mdurl", "packageurl-python", "python-dateutil",
-              "six", "toml", "tomli",
-          }
-          leaked = sorted(n for n in names if n in contaminants)
-          assert not leaked, (
-              f"CI/build/SBOM tooling leaked into the SBOM as components: {leaked}. "
-              "The SBOM must represent only the NATURE distribution (zero runtime deps)."
-          )
-          print(f"SBOM OK: spdxVersion={spdx_version}, packages={sorted(names)}")
+          print(f"SBOM OK: spdxVersion={spdx_version}, packages={names}")
           PY
 
       - name: Generate dist/SHA256SUMS
