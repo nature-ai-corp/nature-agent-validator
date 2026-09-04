@@ -50,3 +50,12 @@ the principles the Phase 0 architecture is built to protect.
 
 No database, Docker, Redis, PostgreSQL, web UI, server process, or background
 workers. No plugin system before it is needed. Phase 0 stays small.
+
+## Non-goals for Phase 3 (scenario suites)
+
+A suite is only an ordered collection of existing scenarios. No tags,
+filtering, templates, variables, inheritance, or environment profiles. No
+parallel execution, retries, fail-fast, watch mode, or remote scenario
+repositories. No historical result storage, HTML/JUnit reporting, or CI/CD
+configuration. Suite execution reuses the single-scenario engine unchanged;
+`ERROR`/`FAIL`/`PASS` keep their meaning.

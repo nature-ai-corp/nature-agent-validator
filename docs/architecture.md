@@ -28,7 +28,8 @@ adapters      -> evidence, scenario  (adapters.http -> urllib, imported lazily o
 assertions    -> evidence            (adapters referenced only for typing)
 reporting     -> assertions, evidence
 runner        -> adapters, assertions, scenario, reporting, evidence
-cli           -> runner, scenario.serialization, adapters.registry
+suite         -> runner, scenario, scenario.serialization, reporting, errors   (Phase 3)
+cli           -> runner, suite, scenario.serialization, adapters.registry
 ```
 
 ## Scenario  (`scenario/`)
@@ -264,14 +265,46 @@ a `ValidationResult`; `run_many(scenarios)` returns a list. The runner holds
 no transport logic and no judgment logic. If `adapter` is passed in, the
 caller owns its lifecycle; if the runner built it, the runner closes it.
 
+## Scenario suite  (`suite/`, Phase 3)
+
+Batch validation of many existing scenarios. Adds **no** new execution,
+assertion, evidence, or status logic — `SuiteRunner` calls the single-scenario
+`Runner` once per scenario.
+
+- `ScenarioSuite(name, scenarios: tuple[Scenario, ...])` — an ordered,
+  immutable collection. Nothing else: no tags, filters, templates, variables,
+  inheritance, or profiles.
+- `load_suite(path) -> ScenarioSuite` — discovers regular `*.json` files
+  directly in a directory (**not** recursive), ordered lexically by file name,
+  each parsed with the existing `load_scenario` deserializer. Raises
+  `ScenarioError` when the path is not a directory, holds no `.json` file, or
+  any file is malformed / structurally invalid — never silently skipped.
+  Non-`.json` entries are ignored.
+- `SuiteRunner(runner=Runner()).run(suite) -> SuiteResult` — sequential, in
+  order, every scenario attempted (no parallelism, retry, or fail-fast).
+- `SuiteResult(name, results: tuple[ValidationResult, ...])` — exposes
+  `total`, `scenario_counts()` (`{pass, fail, error}`), `assertion_counts()`
+  (`{pass, fail, skipped}` summed across scenarios), `overall_status`
+  (`ERROR > FAIL > PASS`; a `PASS`-with-`SKIPPED` scenario stays `PASS`),
+  `summary_lines()`, and `to_dict()`. `to_dict()` embeds each
+  `ValidationResult.to_dict()` verbatim, in discovery order — one result
+  schema, not two.
+
 ## CLI  (`cli/`)
 
 `nav validate <file-or-dir> [--json]`. Loads `.json` scenario(s), runs them
-via the `build_adapter` factory, prints a text summary or full JSON. Exit
-codes: `0` all passed, `1` some failed, `2` some errored / load failure, `3`
-usage. Command naming is not frozen.
+via the `build_adapter` factory, prints a text summary or full JSON.
+
+`nav validate-suite <directory> [--json]` (Phase 3). `load_suite → SuiteRunner
+→ SuiteResult`, then a human summary (suite line + counts + one line per
+scenario) or the suite JSON.
+
+Exit codes, both commands: `0` overall PASS, `1` overall FAIL, `2` overall
+ERROR **or** a load failure (missing path, non-directory suite, no `.json`
+files, malformed/invalid scenario), `3` usage. No Phase-3 additions to this
+set. Command naming is not frozen.
 
 The CLI needed **no changes** for Phase 1: an `http` scenario runs through the
 same `load_scenarios → Runner.run_many → build_adapter` path as a `static`
-one, and both output modes are unchanged. A directory run is non-recursive
-(`*.json`), so `examples/http/` is not picked up by `nav validate examples/`.
+one. A directory run is non-recursive (`*.json`), so neither `examples/http/`
+nor `examples/suite/` is picked up by `nav validate examples/`.

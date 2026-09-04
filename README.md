@@ -70,7 +70,8 @@ assertions/  deterministic checks; each returns a structured PASS / FAIL / SKIPP
 evidence/    small, generic, versioned, optional Evidence Contract
 evaluators/  future extension boundary for semantic evaluation (no impl in Phase 0)
 reporting/   ValidationResult: overall_status (PASS / FAIL / ERROR) + details
-cli/         `nav validate <path>`  (command surface not yet frozen)
+suite/       ScenarioSuite + SuiteRunner + SuiteResult: batch of scenarios, one Runner per scenario
+cli/         `nav validate <path>` / `nav validate-suite <dir>`  (command surface not yet frozen)
 ```
 
 Full detail: [`docs/architecture.md`](docs/architecture.md).
@@ -110,6 +111,48 @@ nav validate examples/sales_cannot_read_payroll.json --json
 
 The `static` adapter ships with Phase 0 and returns canned responses, so the
 examples run with no network and no dependencies.
+
+## Scenario suites — batch validation
+
+`nav validate-suite <directory>` runs every scenario in a directory as one
+batch and aggregates the results. It reuses the single-scenario engine
+verbatim — `SuiteRunner` calls `Runner.run()` once per scenario, sequentially,
+in order.
+
+```bash
+nav validate-suite examples/suite
+nav validate-suite examples/suite --json
+```
+
+Directory loading rules (Phase 3):
+
+- the path must be a **directory**;
+- regular files whose name ends in `.json` are discovered;
+- ordering is **lexical by file name** (deterministic);
+- sub-directories are **not** traversed;
+- non-`.json` entries are ignored;
+- a malformed or structurally invalid `.json` scenario is a **loading error**
+  (never silently skipped).
+
+**Suite status** uses the existing vocabulary with precedence
+`ERROR > FAIL > PASS`: any scenario `ERROR` ⇒ suite `ERROR`; else any scenario
+`FAIL` ⇒ suite `FAIL`; else `PASS`. A scenario that is `PASS` with `SKIPPED`
+assertions stays `PASS` and the suite counts show the skips.
+
+**Exit codes** (`validate` and `validate-suite`): `0` = PASS, `1` = FAIL,
+`2` = ERROR **or** a load error (missing path, non-directory, no `.json`
+files, malformed/invalid scenario). No other exit codes.
+
+The JSON report is `{suite, overall_status, total_scenarios, scenario_counts,
+assertion_counts, results: [<ValidationResult>, …]}` — `results` reuses the
+existing per-scenario serialization, in discovery order.
+
+### Phase 3 limitations
+
+A suite is only an ordered collection of existing scenarios: no tags,
+filtering, templates, variables, inheritance, or environment profiles.
+Execution is sequential only — no parallelism, retries, or fail-fast. No
+historical result storage, no JUnit/HTML output.
 
 ## Generic HTTP adapter
 
