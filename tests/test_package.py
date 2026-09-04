@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
+import io
 import unittest
+from contextlib import redirect_stdout
+
+#: The single authoritative Alpha version. ``pyproject.toml`` sources the
+#: distribution version from ``nature_agent_validator.__version__`` via
+#: setuptools' dynamic ``attr`` mechanism, so this constant is the only place a
+#: release version is edited.
+EXPECTED_VERSION = "0.1.0a1"
 
 
 class PackageImportTests(unittest.TestCase):
@@ -11,6 +19,35 @@ class PackageImportTests(unittest.TestCase):
 
         self.assertIsInstance(nav.__version__, str)
         self.assertRegex(nav.__version__, r"^\d+\.\d+\.\d+")
+
+    def test_version_is_the_frozen_alpha_value(self) -> None:
+        import nature_agent_validator as nav
+
+        self.assertEqual(nav.__version__, EXPECTED_VERSION)
+
+    def test_cli_version_flag_reports_the_same_version(self) -> None:
+        from nature_agent_validator.cli.main import main
+
+        buf = io.StringIO()
+        with self.assertRaises(SystemExit) as ctx, redirect_stdout(buf):
+            main(["--version"])
+        self.assertEqual(ctx.exception.code, 0)
+        self.assertEqual(buf.getvalue().strip(), f"nav {EXPECTED_VERSION}")
+
+    def test_distribution_metadata_matches_when_installed(self) -> None:
+        """When the package is installed, its distribution metadata version
+        must equal ``__version__``. Skipped when running from a source tree
+        that has not been installed (the dynamic attr sourcing is verified by
+        the build check instead)."""
+        from importlib import metadata
+
+        import nature_agent_validator as nav
+
+        try:
+            dist_version = metadata.version("nature-agent-validator")
+        except metadata.PackageNotFoundError:
+            self.skipTest("package not installed; nothing to reconcile")
+        self.assertEqual(dist_version, nav.__version__)
 
     def test_core_domain_objects_are_exported(self) -> None:
         import nature_agent_validator as nav

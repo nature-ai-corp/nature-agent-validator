@@ -1,17 +1,24 @@
 [build-system]
-requires = ["setuptools>=68"]
+# setuptools >= 77 is required for standards-compliant PEP 639 license
+# metadata (`license` as an SPDX expression + `license-files`). The build
+# backend itself is unchanged.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "nature-agent-validator"
-version = "0.0.1"
+# The version is sourced from a single authoritative constant:
+# src/nature_agent_validator/__init__.py :: __version__  (see [tool.setuptools.dynamic]).
+dynamic = ["version"]
 description = "Standalone, no-model-first framework for validating whether an AI agent behaved as expected."
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "NATURE AI CORP" }]
 keywords = ["agent", "validation", "testing", "assurance", "ai-agents"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3.12",
@@ -34,7 +41,12 @@ dev = []
 nav = "nature_agent_validator.cli.main:main"
 
 [project.urls]
+Homepage = "https://github.com/nature-ai-corp/nature-agent-validator"
 Repository = "https://github.com/nature-ai-corp/nature-agent-validator"
+Issues = "https://github.com/nature-ai-corp/nature-agent-validator/issues"
+
+[tool.setuptools.dynamic]
+version = { attr = "nature_agent_validator.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]

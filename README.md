@@ -1,8 +1,8 @@
 # NATURE Agent Validator
 
-> **Status: early development — not production ready.**
-> APIs, the scenario format, and CLI command names may change without notice.
-> Phase 0 is a repository foundation only.
+> **Status: Alpha (`0.1.0a1`) — not production ready.**
+> Licensed under [Apache-2.0](LICENSE). APIs, the scenario format, and CLI
+> command names may still change without notice.
 
 A standalone framework for answering one question:
 
@@ -413,20 +413,23 @@ python -m unittest discover -s tests -t .
 
 Python 3.12, 3.13, and 3.14 are supported. There are no third-party
 dependencies — runtime or development — and none may be added without OSS
-review (see below).
+review (see below). See [`CONTRIBUTING.md`](CONTRIBUTING.md) to contribute and
+[`SECURITY.md`](SECURITY.md) to report a vulnerability;
+[`CHANGELOG.md`](CHANGELOG.md) tracks releases.
 
 ## Dependency policy
 
-This repository is intended for a future public open-source release. Until
-then:
-
-- no code is copied from other NATURE systems;
+- no code is copied from other projects; contributions carry known provenance
+  and a compatible license;
 - the standard library is the default;
-- **any** proposed third-party package is raised for OSS review first, with
-  its name, official repository, version, purpose, and the reason the standard
-  library is insufficient.
+- **any** proposed third-party package (runtime, dev, or build) is raised for
+  review first, with its name, official repository, version, purpose, and the
+  reason the standard library is insufficient.
 
-No `LICENSE` file is included yet and no OSS license is claimed.
+## License
+
+Copyright 2026 NATURE AI CORP. Released under the
+[Apache License 2.0](LICENSE); see [`NOTICE`](NOTICE).
 
 ## Project boundary
 

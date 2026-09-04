@@ -68,7 +68,10 @@ from nature_agent_validator.configuration import (
     load_environment,
 )
 
-__version__ = "0.0.1"
+#: Single authoritative version for the package. ``pyproject.toml`` sources the
+#: distribution version from this constant via setuptools' dynamic ``attr``
+#: mechanism, so it is never duplicated. Keep it a plain string literal.
+__version__ = "0.1.0a1"
 
 __all__ = [
     "__version__",
