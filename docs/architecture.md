@@ -29,7 +29,8 @@ assertions    -> evidence            (adapters referenced only for typing)
 reporting     -> assertions, evidence
 runner        -> adapters, assertions, scenario, reporting, evidence
 suite         -> runner, scenario, scenario.serialization, reporting, errors   (Phase 3)
-cli           -> runner, suite, scenario.serialization, adapters.registry
+reporting.junit -> suite, reporting, assertions.result   (Phase 4; not imported by reporting/__init__)
+cli           -> runner, suite, reporting.junit, scenario.serialization, adapters.registry
 ```
 
 ## Scenario  (`scenario/`)
@@ -290,19 +291,60 @@ assertion, evidence, or status logic — `SuiteRunner` calls the single-scenario
   `ValidationResult.to_dict()` verbatim, in discovery order — one result
   schema, not two.
 
+## JUnit reporter  (`reporting/junit.py`, Phase 4)
+
+`suite_result_to_junit_xml(result: SuiteResult) -> str` — **one explicit
+reporter**, a pure function, no plugin/registry/templating. Runs nothing and
+changes no status; `reporting/__init__.py` does not import it, so importing
+`reporting` stays cycle-free.
+
+- **Mapping (frozen):** `SuiteResult` → one `<testsuite>`; each
+  `ValidationResult` → one `<testcase>` (never per-assertion). Scenario `FAIL`
+  → one `<failure>`; `ERROR` → one `<error>`; `PASS` → neither.
+- **`<testsuite>` counts are scenario-level:** `tests` = scenario count,
+  `failures` = scenario `FAIL` count, `errors` = scenario `ERROR` count,
+  `skipped` = `"0"` always. Assertion `SKIPPED` is never a JUnit `<skipped>`
+  and never changes a testcase result — NATURE has no scenario-level SKIPPED.
+- **Identity:** `<testcase name>` = scenario name (falls back to `scenario_id`),
+  `classname` = suite name; `scenario_id` is a `<property>`. No absolute paths.
+- **Diagnostics (concise, redacted):** `<properties>` carry `scenario_id` and
+  `assertions.passed/failed/skipped`; `<system-out>` repeats the counts. A
+  `<failure>` body lists `"[type] assertion_id: message"` for the failed
+  assertions (the framework's own normalized messages); an `<error>` body is
+  the `ValidationResult.errors` strings. The reporter never emits request/
+  response headers, credentials, raw bodies, or raw evidence payloads, and in
+  particular never emits `AssertionResult.observed` (which can carry
+  target-originated clipped response text) or `expected`.
+- **Determinism:** output is a pure function of the `SuiteResult` — order
+  preserved, attribute order fixed, no timestamp / hostname / random id. XML is
+  built and escaped with `xml.etree.ElementTree` (`ET.indent` +
+  `tostring(xml_declaration=True)`), stdlib only.
+- **Timing:** `time` (seconds) on `<testcase>`/`<testsuite>` comes only from
+  `ExecutionMetadata.duration_ms` already in the result; omitted when a
+  scenario has no `execution_metadata`.
+
 ## CLI  (`cli/`)
 
 `nav validate <file-or-dir> [--json]`. Loads `.json` scenario(s), runs them
 via the `build_adapter` factory, prints a text summary or full JSON.
 
-`nav validate-suite <directory> [--json]` (Phase 3). `load_suite → SuiteRunner
-→ SuiteResult`, then a human summary (suite line + counts + one line per
-scenario) or the suite JSON.
+`nav validate-suite <directory> [--json | --junit | --junit-output FILE]`.
+`load_suite → SuiteRunner → SuiteResult`, then one output mode (mutually
+exclusive, enforced by an argparse group):
+
+| mode | stdout | file |
+| --- | --- | --- |
+| *(none)* | human summary | — |
+| `--json` | suite JSON | — |
+| `--junit` | JUnit XML **only** | — |
+| `--junit-output FILE` | human summary | JUnit XML (UTF-8) at `FILE` |
 
 Exit codes, both commands: `0` overall PASS, `1` overall FAIL, `2` overall
 ERROR **or** a load failure (missing path, non-directory suite, no `.json`
-files, malformed/invalid scenario), `3` usage. No Phase-3 additions to this
-set. Command naming is not frozen.
+files, malformed/invalid scenario) **or** a JUnit report-write failure, `3`
+argparse usage (argparse also exits `2` for a conflicting flag combination). A
+successful JUnit export never changes the exit code. Command naming is not
+frozen.
 
 The CLI needed **no changes** for Phase 1: an `http` scenario runs through the
 same `load_scenarios → Runner.run_many → build_adapter` path as a `static`

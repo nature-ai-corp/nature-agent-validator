@@ -27,10 +27,11 @@ PYTHONPATH=src python -m nature_agent_validator validate examples/
 subdirectory and is not part of the network-free `nav validate examples/` run.
 See [`http/README.md`](http/README.md).
 
-## Scenario suite (Phase 3)
+## Scenario suite (Phase 3–4)
 
 [`suite/`](suite/) is a batch of four `StaticAdapter` scenarios (normal PASS,
 deterministic FAIL, black-box PASS with a `SKIPPED` evidence assertion, and an
-evidence-enabled PASS). Run it with `nav validate-suite examples/suite`. It is
+evidence-enabled PASS). Run it with `nav validate-suite examples/suite`, or
+emit a CI-portable JUnit report with `--junit` / `--junit-output FILE`. It is
 a sub-directory, so `nav validate examples/` does not pick it up. See
 [`suite/README.md`](suite/README.md).

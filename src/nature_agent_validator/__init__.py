@@ -59,6 +59,7 @@ from nature_agent_validator.suite import (
     SuiteRunner,
     load_suite,
 )
+from nature_agent_validator.reporting.junit import suite_result_to_junit_xml
 
 __version__ = "0.0.1"
 
@@ -100,6 +101,8 @@ __all__ = [
     "SuiteResult",
     "SuiteRunner",
     "load_suite",
+    # reporting (Phase 4)
+    "suite_result_to_junit_xml",
     # errors
     "NatureValidatorError",
     "ScenarioError",

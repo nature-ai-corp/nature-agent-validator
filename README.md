@@ -137,22 +137,68 @@ Directory loading rules (Phase 3):
 **Suite status** uses the existing vocabulary with precedence
 `ERROR > FAIL > PASS`: any scenario `ERROR` ⇒ suite `ERROR`; else any scenario
 `FAIL` ⇒ suite `FAIL`; else `PASS`. A scenario that is `PASS` with `SKIPPED`
-assertions stays `PASS` and the suite counts show the skips.
-
-**Exit codes** (`validate` and `validate-suite`): `0` = PASS, `1` = FAIL,
-`2` = ERROR **or** a load error (missing path, non-directory, no `.json`
-files, malformed/invalid scenario). No other exit codes.
+assertions stays `PASS` and the suite counts show the skips. (Exit codes:
+see below.)
 
 The JSON report is `{suite, overall_status, total_scenarios, scenario_counts,
 assertion_counts, results: [<ValidationResult>, …]}` — `results` reuses the
 existing per-scenario serialization, in discovery order.
 
-### Phase 3 limitations
+### JUnit XML for CI
+
+`validate-suite` can also emit a JUnit XML report — the portable format most
+CI systems and test-report viewers already understand.
+
+```bash
+nav validate-suite examples/suite --junit                     # XML to stdout (XML only)
+nav validate-suite examples/suite --junit-output report.xml   # XML to a file (UTF-8)
+```
+
+Mapping (frozen): one **suite** → one `<testsuite>`; one **scenario** → one
+`<testcase>` (never one per assertion). Scenario `FAIL` → a `<failure>`;
+scenario `ERROR` → an `<error>`; scenario `PASS` → neither.
+
+`<testsuite>` counts are **scenario-level**: `tests` = scenario count,
+`failures` = scenario `FAIL` count, `errors` = scenario `ERROR` count, and
+`skipped` is always `0`. An assertion-level `SKIPPED` (e.g. evidence coverage
+absent) is **not** a testcase skip and never changes the testcase result — a
+`PASS` scenario with skipped assertions stays a passing `<testcase>`. Assertion
+pass/fail/skip counts are kept as diagnostics only (`<properties>` and
+`<system-out>`); `scenario_id` is a `<property>`.
+
+Diagnostics are deliberately concise and **redacted**: the reporter never
+emits request/response headers, credentials, raw bodies, or raw evidence
+payloads. It does not emit `AssertionResult.observed` (which can carry
+target-originated response text); a `<failure>` carries only the assertion
+type and the framework's own normalized message, and an `<error>` carries the
+existing `ValidationResult.errors` strings.
+
+Output is deterministic for a given `SuiteResult` (order preserved, no
+wall-clock timestamp / hostname / random id / absolute path). `time` on a
+`<testcase>`/`<testsuite>` is the per-scenario duration already recorded in
+`ExecutionMetadata`, in seconds; it is omitted when no duration is available.
+
+Exit codes are unchanged: a successful JUnit export never alters the suite
+result. `--junit-output` still prints the human summary on stdout; a report
+**write failure** forces exit `2` even when the suite passed. `--json`,
+`--junit`, and `--junit-output` are mutually exclusive (argparse rejects a
+conflicting combination).
+
+### Exit codes
+
+`0` = PASS, `1` = FAIL, `2` = ERROR **or** a load error (missing path,
+non-directory, no `.json` files, malformed/invalid scenario) **or** a JUnit
+report-write failure. No other exit codes (argparse itself exits `2` on a bad
+flag combination).
+
+### Phase 3–4 limitations
 
 A suite is only an ordered collection of existing scenarios: no tags,
 filtering, templates, variables, inheritance, or environment profiles.
 Execution is sequential only — no parallelism, retries, or fail-fast. No
-historical result storage, no JUnit/HTML output.
+historical result storage, no HTML report, no dashboard, no upload service,
+and no CI-vendor workflow files. JUnit is one explicit reporter, not a plugin
+framework.
 
 ## Generic HTTP adapter
 

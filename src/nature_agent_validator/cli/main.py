@@ -4,10 +4,17 @@ Exit codes (shared by ``validate`` and ``validate-suite``):
 
 * ``0`` -- overall PASS (every scenario passed; SKIPPED assertions are fine)
 * ``1`` -- overall FAIL (at least one scenario FAILed, none ERRORed)
-* ``2`` -- overall ERROR: at least one scenario ERRORed, or the input could
+* ``2`` -- overall ERROR: at least one scenario ERRORed, the input could
            not be loaded (missing path, non-directory suite, malformed or
-           invalid ``.json`` scenario)
-* ``3`` -- usage error
+           invalid ``.json`` scenario), or a JUnit report file could not be
+           written
+* ``3`` -- usage error (argparse also exits ``2`` for conflicting flags)
+
+``validate-suite`` output modes are mutually exclusive: default human summary,
+``--json`` (JSON to stdout), ``--junit`` (JUnit XML **only** to stdout), or
+``--junit-output FILE`` (JUnit XML to ``FILE`` as UTF-8, human summary still
+on stdout). A successful JUnit export never changes the suite exit code; a
+write failure forces exit ``2``.
 """
 
 from __future__ import annotations
@@ -15,11 +22,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 from typing import Sequence
 
 from nature_agent_validator import __version__
 from nature_agent_validator.errors import NatureValidatorError
 from nature_agent_validator.reporting import OverallStatus
+from nature_agent_validator.reporting.junit import suite_result_to_junit_xml
 from nature_agent_validator.runner import Runner
 from nature_agent_validator.scenario.serialization import load_scenarios
 from nature_agent_validator.suite import SuiteRunner, load_suite
@@ -60,11 +69,24 @@ def build_parser() -> argparse.ArgumentParser:
     suite.add_argument(
         "path", help="path to a directory of .json scenario files (not recursive)"
     )
-    suite.add_argument(
+    # One machine-output mode at a time (argparse rejects conflicts, exit 2).
+    suite_out = suite.add_mutually_exclusive_group()
+    suite_out.add_argument(
         "--json",
         action="store_true",
         dest="as_json",
-        help="emit the full suite result as JSON instead of a text summary",
+        help="emit the full suite result as JSON to stdout",
+    )
+    suite_out.add_argument(
+        "--junit",
+        action="store_true",
+        help="emit a JUnit XML report (only XML) to stdout",
+    )
+    suite_out.add_argument(
+        "--junit-output",
+        metavar="FILE",
+        dest="junit_output",
+        help="write a JUnit XML report to FILE (UTF-8); human summary still on stdout",
     )
     return parser
 
@@ -138,7 +160,23 @@ def _run_suite(args: argparse.Namespace) -> int:
 
     result = SuiteRunner().run(suite)
 
-    if args.as_json:
+    if args.junit:
+        # stdout carries XML and nothing else
+        xml = suite_result_to_junit_xml(result)
+        sys.stdout.write(xml if xml.endswith("\n") else xml + "\n")
+    elif args.junit_output:
+        xml = suite_result_to_junit_xml(result)
+        try:
+            Path(args.junit_output).write_text(xml, encoding="utf-8")
+        except OSError as exc:
+            print(
+                f"error: could not write JUnit report to {args.junit_output!r}: {exc}",
+                file=sys.stderr,
+            )
+            return EXIT_ERROR  # a report-write failure never returns success
+        for line in result.summary_lines():
+            print(line)
+    elif args.as_json:
         json.dump(result.to_dict(), sys.stdout, indent=2, default=str)
         sys.stdout.write("\n")
     else:
