@@ -10,6 +10,23 @@ Exit codes (shared by ``validate`` and ``validate-suite``):
            written
 * ``3`` -- usage error (argparse also exits ``2`` for conflicting flags)
 
+The ``scenario`` command group (Phase 6 -- authoring & developer UX) adds no
+runtime capability:
+
+* ``nav scenario init FILE``            -- write a deterministic, minimal, valid
+                                          HTTP starter scenario (never
+                                          overwrites)
+* ``nav scenario check FILE``           -- static validation only, through the
+                                          same loader the runner uses; no
+                                          network, adapter send, or secret
+                                          resolution
+* ``nav scenario describe``             -- authoring overview of the Scenario
+                                          structure
+* ``nav scenario describe assertions``  -- the deterministic assertion catalog
+
+These use exit ``0`` on success and exit ``2`` on any error (``check`` has no
+exit ``1``: a scenario is either statically valid or it is not).
+
 ``validate-suite`` output modes are mutually exclusive: default human summary,
 ``--json`` (JSON to stdout), ``--junit`` (JUnit XML **only** to stdout), or
 ``--junit-output FILE`` (JUnit XML to ``FILE`` as UTF-8, human summary still
@@ -31,7 +48,7 @@ import sys
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from nature_agent_validator import __version__, configuration
+from nature_agent_validator import __version__, authoring, configuration
 from nature_agent_validator.errors import NatureValidatorError
 from nature_agent_validator.reporting import OverallStatus
 from nature_agent_validator.reporting.junit import suite_result_to_junit_xml
@@ -104,6 +121,35 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="FILE",
         dest="junit_output",
         help="write a JUnit XML report to FILE (UTF-8); human summary still on stdout",
+    )
+
+    scenario = sub.add_parser(
+        "scenario",
+        help="author scenarios: starter files, static checks, reference (Phase 6)",
+    )
+    scenario_sub = scenario.add_subparsers(
+        dest="scenario_command", required=True
+    )
+    sc_init = scenario_sub.add_parser(
+        "init", help="write a minimal valid HTTP starter scenario (never overwrites)"
+    )
+    sc_init.add_argument("file", help="destination path for the new scenario file")
+    sc_check = scenario_sub.add_parser(
+        "check",
+        help="statically validate a scenario file -- no agent call, no network",
+    )
+    sc_check.add_argument("file", help="path to a .json scenario file")
+    sc_describe = scenario_sub.add_parser(
+        "describe",
+        help="print an authoring overview, or the assertion catalog",
+    )
+    sc_describe.add_argument(
+        "topic",
+        nargs="?",
+        choices=["assertions"],
+        default=None,
+        help="'assertions' for the deterministic assertion catalog; "
+        "omit for the Scenario structure overview",
     )
     return parser
 
@@ -219,6 +265,60 @@ def _run_suite(args: argparse.Namespace) -> int:
     return _exit_code_for(result.overall_status)
 
 
+def _run_scenario(args: argparse.Namespace) -> int:
+    if args.scenario_command == "init":
+        return _run_scenario_init(args)
+    if args.scenario_command == "check":
+        return _run_scenario_check(args)
+    if args.scenario_command == "describe":
+        return _run_scenario_describe(args)
+    print(  # pragma: no cover - argparse enforces the choices
+        f"error: unknown scenario command {args.scenario_command!r}",
+        file=sys.stderr,
+    )
+    return EXIT_ERROR
+
+
+def _run_scenario_init(args: argparse.Namespace) -> int:
+    try:
+        written = authoring.init_scenario_file(args.file)
+    except NatureValidatorError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    except OSError as exc:
+        print(
+            f"error: could not write starter scenario to {args.file!r}: {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+    print(f"wrote starter scenario: {written}")
+    print(f"next: nav scenario check {written}")
+    return EXIT_OK
+
+
+def _run_scenario_check(args: argparse.Namespace) -> int:
+    try:
+        diagnostics = authoring.check_scenario_file(args.file)
+    except NatureValidatorError as exc:  # pragma: no cover - defensive
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    if diagnostics:
+        print(f"invalid: {args.file}", file=sys.stderr)
+        for line in diagnostics:
+            print(f"  {line}", file=sys.stderr)
+        return EXIT_ERROR
+    print(f"valid: {args.file}")
+    return EXIT_OK
+
+
+def _run_scenario_describe(args: argparse.Namespace) -> int:
+    if args.topic == "assertions":
+        sys.stdout.write(authoring.describe_assertions())
+    else:
+        sys.stdout.write(authoring.describe_scenario())
+    return EXIT_OK
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -226,6 +326,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_validate(args)
     if args.command == "validate-suite":
         return _run_suite(args)
+    if args.command == "scenario":
+        return _run_scenario(args)
     parser.error(f"unknown command {args.command!r}")  # pragma: no cover
     return EXIT_USAGE  # pragma: no cover
 

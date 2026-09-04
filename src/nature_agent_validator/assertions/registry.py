@@ -38,6 +38,17 @@ def _known_types() -> tuple[str, ...]:
     return tuple(sorted(_REGISTRY))
 
 
+def known_assertion_types() -> tuple[str, ...]:
+    """The registered assertion type names, sorted.
+
+    Read-only introspection over the same private table that
+    :func:`build_assertion` dispatches through -- so an authoring catalog can be
+    checked against it and never drift. This is **not** a registration API:
+    there is still no supported way to add a type from outside this package.
+    """
+    return _known_types()
+
+
 def _get_assertion_type(name: str) -> type[Assertion]:
     try:
         return _REGISTRY[name]
@@ -52,4 +63,4 @@ def build_assertion(spec: AssertionSpec) -> Assertion:
     return _get_assertion_type(spec.type).from_spec(spec)
 
 
-__all__ = ["build_assertion"]
+__all__ = ["build_assertion", "known_assertion_types"]

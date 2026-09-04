@@ -31,7 +31,8 @@ runner        -> adapters, assertions, scenario, reporting, evidence
 suite         -> runner, scenario, scenario.serialization, reporting, errors   (Phase 3)
 reporting.junit -> suite, reporting, assertions.result   (Phase 4; not imported by reporting/__init__)
 configuration -> scenario, errors   (Phase 5; no os.environ read here -- refs only)
-cli           -> runner, suite, reporting.junit, configuration, scenario.serialization, adapters.registry
+authoring     -> scenario.serialization, adapters(.registry/.result), assertions, errors   (Phase 6; no urllib -- build_adapter's http load stays lazy)
+cli           -> runner, suite, reporting.junit, configuration, authoring, scenario.serialization, adapters.registry
 ```
 
 `adapters.http` gained one runtime edge in Phase 5: it reads `os.environ`
@@ -369,6 +370,52 @@ secret managers.
   `self._timeout` and never stringify the `Request` or the headers dict, so no
   error-path normalization was needed for Phase 5.
 
+## Scenario authoring  (`authoring/`, Phase 6)
+
+Developer UX over the **existing** authoritative Scenario contract — no runtime
+capability, no second schema, no templates/wizard/YAML/JSON-Schema.
+
+- `build_starter_scenario(path)` / `render_starter_scenario(path)` /
+  `init_scenario_file(path)` — one deterministic, minimal, valid **HTTP**
+  starter. `scenario_id` / `name` are derived from the file name as a
+  convenience only (no new identifier rules). The JSON is 2-space-indented,
+  UTF-8, single trailing newline, stable key order, and carries no timestamp,
+  host, user, UUID, environment data, or credential/secret material — just a
+  `http://127.0.0.1:8080/agent` placeholder and two starter assertions.
+  `init_scenario_file` **never overwrites** (`open(..., "x")` +
+  pre-check → `ScenarioError` → exit `2`); a missing parent dir surfaces as
+  `OSError` → exit `2`.
+- `check_scenario_file(path) -> list[str]` — **static** validation only,
+  reusing the runtime path: `load_scenario` (JSON syntax, root shape, required
+  fields, types, identifier coercion), then `build_adapter(scenario.target)`
+  for the adapter name + config shape (it constructs the adapter but never
+  calls `send`, does no I/O, and resolves **no** secret — `http` still
+  validates `url` / `method` / `timeout_seconds` / `headers` /
+  `evidence_field` / `secret_headers` *references*), then `build_assertion` +
+  one `evaluate` against a benign fully-static `AssertionContext` to surface
+  unknown assertion types and assertion-config errors. It performs no HTTP
+  request, DNS lookup, socket, adapter send, agent execution, secret
+  resolution, or `os.environ` credential read, and neither mutates the
+  scenario nor writes a file. Diagnostics are concise `field.path: message`
+  strings (`expectations[1].type: unknown assertion type '...'`,
+  `target: http adapter requires 'url' ...`); an empty list means valid.
+  `check` has exit codes `0` (valid) / `2` (invalid) — **no** exit `1`.
+- `describe_scenario()` / `describe_assertions()` — plain reference text.
+  Adapter names come from `adapters.available_adapter_names()`; the assertion
+  list is taken from `assertions.known_assertion_types()` (the same private
+  table `build_assertion` dispatches through). `ASSERTION_CATALOG` is a small
+  immutable metadata table (category, summary, required/optional config); it is
+  **not** authoritative for which types exist, and `tests/test_authoring.py`
+  fails if the two sets diverge. `describe assertions` preserves the Phase 2
+  evidence semantics verbatim — *absence of evidence is not evidence of
+  absence*, and evidence assertions are `SKIPPED` (never `FAIL`/`PASS`) when
+  evidence is unavailable or the namespace is uncovered.
+
+`known_assertion_types()` (assertions) and `available_adapter_names()`
+(adapters) are **read-only** introspection helpers added for this layer — not a
+plugin/registration API. Phase 0's deferral of public `register_*` hooks
+stands.
+
 ## CLI  (`cli/`)
 
 `nav validate <file-or-dir> [--json] [--environment FILE]`. Loads `.json`
@@ -399,3 +446,10 @@ The CLI needed **no changes** for Phase 1: an `http` scenario runs through the
 same `load_scenarios → Runner.run_many → build_adapter` path as a `static`
 one. A directory run is non-recursive (`*.json`), so neither `examples/http/`
 nor `examples/suite/` is picked up by `nav validate examples/`.
+
+`nav scenario <init|check|describe>` (Phase 6) is a third subcommand group that
+delegates straight to `authoring`. `init FILE` and `check FILE` take one
+explicit file path; `describe` takes an optional `assertions` topic. Success is
+exit `0`; any error (existing-file / unwritable path for `init`, any static
+diagnostic for `check`) is exit `2`. `check` has no exit `1`. These commands
+run no scenario and touch no network.

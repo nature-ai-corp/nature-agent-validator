@@ -43,6 +43,16 @@ def _available_names() -> list[str]:
     return sorted({*_BUILTIN, *_LAZY})
 
 
+def available_adapter_names() -> tuple[str, ...]:
+    """The names :func:`build_adapter` can resolve, sorted.
+
+    Read-only introspection for authoring UX. It does not import or construct
+    any adapter (the ``http`` module stays unloaded) and is not a registration
+    API.
+    """
+    return tuple(_available_names())
+
+
 def build_adapter(target: "ScenarioTarget") -> TargetAdapter:
     """Factory: build the built-in adapter named by ``target.adapter``."""
     name = target.adapter
@@ -58,4 +68,4 @@ def build_adapter(target: "ScenarioTarget") -> TargetAdapter:
     return cls.from_config(target.config)
 
 
-__all__ = ["build_adapter"]
+__all__ = ["build_adapter", "available_adapter_names"]

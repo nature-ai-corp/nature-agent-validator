@@ -72,7 +72,8 @@ evaluators/  future extension boundary for semantic evaluation (no impl in Phase
 reporting/   ValidationResult: overall_status (PASS / FAIL / ERROR) + details; junit.py = CI export
 suite/       ScenarioSuite + SuiteRunner + SuiteResult: batch of scenarios, one Runner per scenario
 configuration/ EnvironmentConfig + load_environment + apply_environment: runtime HTTP overrides & secret-header refs
-cli/         `nav validate <path>` / `nav validate-suite <dir>` [--environment FILE]  (command surface not yet frozen)
+cli/         `nav validate <path>` / `nav validate-suite <dir>` [--environment FILE] / `nav scenario init|check|describe`  (command surface not yet frozen)
+authoring/   `nav scenario` helpers: deterministic starter, static check, describe — a thin layer over the existing contract, no runtime capability
 ```
 
 Full detail: [`docs/architecture.md`](docs/architecture.md).
@@ -112,6 +113,58 @@ nav validate examples/sales_cannot_read_payroll.json --json
 
 The `static` adapter ships with Phase 0 and returns canned responses, so the
 examples run with no network and no dependencies.
+
+## First validation in 5 minutes
+
+```bash
+pip install -e .
+
+nav scenario init hello-agent.json      # write a minimal, valid HTTP starter
+nav scenario check hello-agent.json     # static validation — no agent call
+# edit hello-agent.json: set target.config.url and the expectations
+nav validate hello-agent.json           # run it against the agent
+```
+
+- **`nav scenario init FILE`** writes one deterministic, minimal, valid HTTP
+  scenario. It never overwrites an existing file (exit `2`), and contains no
+  timestamp, host, user, UUID, or credential/secret material — just a
+  `http://127.0.0.1:8080/agent` placeholder URL and two starter assertions.
+- **`nav scenario check FILE`** validates a scenario file through the *same*
+  loader the runner uses, plus the adapter- and assertion-config checks the
+  runtime already performs. It makes **no** network request, adapter send, or
+  secret resolution, and never modifies the file. Exit `0` if valid, `2` if
+  not — there is no exit `1`.
+- **`nav scenario describe`** prints the Scenario structure;
+  **`nav scenario describe assertions`** prints the deterministic assertion
+  catalog (response checks and evidence checks, with the SKIPPED / coverage
+  rules).
+
+Runtime endpoint, header, and **secret** overrides are *not* part of the
+scenario — supply them separately with `nav validate --environment FILE` (see
+[Environments & secret-safe HTTP auth](#environments--secret-safe-http-auth)).
+**Never store credentials in a scenario JSON file**; secret values come only
+from process environment variables, resolved at request time.
+
+### Authoring diagnostics
+
+`nav scenario check` reports a concise `field.path: message` per problem:
+
+```text
+# malformed JSON
+  hello-agent.json: invalid JSON: Expecting value: line 3 column 1 (char 20)
+
+# missing required field
+  scenario is missing required field 'name'
+
+# unknown assertion type
+  expectations[1].type: unknown assertion type 'contains_all' (known: contains, equals, …)
+
+# wrong field type
+  expectations[0] (status_equals): assertion 'status-ok': 'value' must be an integer
+
+# adapter config
+  target: http adapter requires 'url' in target.config
+```
 
 ## Scenario suites — batch validation
 

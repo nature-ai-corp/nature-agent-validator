@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .base import AdapterResponse, TargetAdapter
-from .registry import build_adapter
+from .registry import available_adapter_names, build_adapter
 from .result import NormalizedResult
 from .static import StaticAdapter
 
@@ -12,5 +12,6 @@ __all__ = [
     "NormalizedResult",
     "StaticAdapter",
     "TargetAdapter",
+    "available_adapter_names",
     "build_adapter",
 ]

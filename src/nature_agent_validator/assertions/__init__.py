@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from .base import Assertion
 from .context import AssertionContext
-from .registry import build_assertion
+from .registry import build_assertion, known_assertion_types
 from .result import AssertionOutcome, AssertionResult
 from .spec import AssertionSpec
 
@@ -23,4 +23,5 @@ __all__ = [
     "AssertionResult",
     "AssertionSpec",
     "build_assertion",
+    "known_assertion_types",
 ]

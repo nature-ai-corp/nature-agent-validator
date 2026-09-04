@@ -15,6 +15,15 @@ Or without installing:
 PYTHONPATH=src python -m nature_agent_validator validate examples/
 ```
 
+New to the scenario format? Generate your own starter instead of copying an
+example, and check it before you run it:
+
+```bash
+nav scenario init hello-agent.json     # minimal, valid HTTP starter (never overwrites)
+nav scenario check hello-agent.json    # static validation, no agent call
+nav scenario describe assertions       # the deterministic assertion catalog
+```
+
 | File | Shows |
 | --- | --- |
 | `sales_cannot_read_payroll.json` | Evidence-enabled target: visible refusal **and** internal assertions are evaluated. Evidence declares `coverage: ["request","authorization","tool","response"]`, so `evidence_event_exists` (authorization deny) and `evidence_event_not_exists` (no `tool.executed` for `payroll.read`) both PASS. |

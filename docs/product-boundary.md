@@ -72,3 +72,21 @@ variables are the only secret source, and secret **references** — never values
 URL templates, no `${VAR}` interpolation of any field, no environment or
 profile inheritance, no config registry or auto-discovery, no Basic/OAuth
 composition. No result- or report-schema changes.
+
+## Non-goals for Phase 6 (scenario authoring & developer UX)
+
+Phase 6 adds `nav scenario init | check | describe` as a thin authoring layer
+over the **existing** Scenario contract. It adds **no** runtime capability and
+**no** second schema. Not in scope: a web/GUI wizard, template or example
+libraries (security/evidence/provider templates), scenario inheritance /
+composition / variables / `${...}` interpolation, a formatter / auto-fix /
+style-or-policy lint, a warnings/severity/error-code framework, a
+source-span/AST diagnostic subsystem, an LSP / IDE integration, YAML / TOML /
+published JSON Schema / schema registry or server, stdin authoring, directory
+or `check-suite` checking, network-reachability or remote-OpenAPI validation,
+secret resolution during `check`, `.env` / dotenv, and any LLM-assisted
+scenario generation. `check` performs **no** network request, adapter send, or
+secret resolution. The assertion catalog is a documentation view of the live
+registry — it is not a public plugin registry and there is still no public
+`register_*` API. No result- or report-schema changes; PASS/FAIL/ERROR and all
+Phase 1–5 semantics are unchanged.
