@@ -1,14 +1,20 @@
-# NATURE Agent Validator -- CI foundation (Phase 7C-A).
+# NATURE Agent Validator -- CI (Phases 7C-A + 7C-B).
 #
-# Scope: proves the package on Python 3.12 / 3.13 / 3.14 -- unit tests,
-# byte-compile, normal install, installed metadata/version consistency,
-# sdist + wheel build, and a clean-room install of the built wheel with CLI
-# smoke checks. This workflow does NOT publish anything: no artifact upload,
-# no GitHub Release, no PyPI, no tags, no SBOM/provenance/attestation.
+# tests job:  Python 3.12 / 3.13 / 3.14 -- unit tests, installed
+#             metadata/version proof, byte-compile.
+# build job:  sdist + wheel build, distribution-metadata + license-file
+#             checks, clean-room wheel install with CLI smoke, an SPDX JSON
+#             SBOM for the installed NATURE distribution, and a SHA256SUMS
+#             manifest -- each independently verified with the standard library.
 #
-# Every third-party action is pinned to a full 40-character commit SHA. Only
-# actions/checkout and actions/setup-python are used. The only extra CI tool
-# installed is PyPA `build` (pinned exact version), in the build job only.
+# Release PREPARATION only: no artifact upload, no GitHub Release, no PyPI,
+# no Git tag, no signing, no attestation, no external SBOM upload.
+#
+# Every third-party action is pinned to a full 40-character commit SHA
+# (actions/checkout, actions/setup-python only). Extra tools installed in the
+# build job are version-pinned and CI/release tooling only -- never project
+# dependencies (see docs/release-tooling.md): PyPA build==1.6.0,
+# sbom4python==0.12.6.
 
 name: CI
 
@@ -66,7 +72,7 @@ jobs:
         run: python -m compileall -q src tests
 
   build:
-    name: build & clean-room wheel smoke
+    name: build, wheel smoke, SBOM & checksums
     runs-on: ubuntu-latest
     # Independent of the test matrix on purpose: it rebuilds from a fresh
     # checkout rather than consuming matrix artifacts.
@@ -145,3 +151,133 @@ jobs:
           "$venv/bin/nav" --help
           "$venv/bin/nav" scenario describe
           "$venv/bin/python" -c "import nature_agent_validator as n, importlib.metadata as m; assert n.__version__ == '0.1.0a1', n.__version__; assert m.version('nature-agent-validator') == '0.1.0a1', m.version('nature-agent-validator'); print('installed wheel import OK:', n.__version__)"
+
+      - name: Install the SBOM generator (pinned; CI/release tooling only)
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/wheel-venv/bin/python" -m pip install "sbom4python==0.12.6"
+          echo "--- resolved SBOM-tooling closure in the clean-room venv (provenance record) ---"
+          "$RUNNER_TEMP/wheel-venv/bin/python" -m pip list --format=freeze
+
+      - name: Generate the SPDX JSON SBOM for the installed NATURE distribution
+        run: |
+          set -euo pipefail
+          venv="$RUNNER_TEMP/wheel-venv"
+          out="$GITHUB_WORKSPACE/dist/nature-agent-validator-0.1.0a1.spdx.json"
+          # Run from outside the source tree. Module mode -> only the target
+          # distribution and its (empty) runtime dependency closure; the SBOM
+          # tool and its own deps must NOT appear (asserted in the next step).
+          cd "$RUNNER_TEMP"
+          "$venv/bin/sbom4python" \
+            --module nature_agent_validator \
+            --sbom spdx \
+            --format json \
+            --output-file "$out"
+          test -s "$out"
+
+      - name: Validate the SBOM (stdlib only; do not trust the generator exit code)
+        run: |
+          python - <<'PY'
+          import json, os
+
+          path = "dist/nature-agent-validator-0.1.0a1.spdx.json"
+          assert os.path.isfile(path), "SBOM file was not created"
+          assert os.path.getsize(path) > 0, "SBOM file is empty"
+          with open(path, encoding="utf-8") as fh:
+              doc = json.load(fh)  # raises if the file is not valid JSON
+
+          spdx_version = doc.get("spdxVersion")
+          assert spdx_version in {"SPDX-2.2", "SPDX-2.3"}, f"unexpected spdxVersion: {spdx_version!r}"
+          assert doc.get("SPDXID") == "SPDXRef-DOCUMENT", f"SPDXID: {doc.get('SPDXID')!r}"
+          assert doc.get("dataLicense"), "SBOM has no dataLicense"
+          assert doc.get("name"), "SBOM document has no name"
+
+          packages = doc.get("packages") or []
+          assert packages, "SBOM contains no packages"
+
+          def norm(value):
+              return (value or "").strip().lower().replace("_", "-")
+
+          names = {norm(p.get("name")) for p in packages}
+          assert "nature-agent-validator" in names, f"NATURE package absent; packages={sorted(names)}"
+
+          nav = next(p for p in packages if norm(p.get("name")) == "nature-agent-validator")
+          assert nav.get("versionInfo") == "0.1.0a1", f"NATURE versionInfo={nav.get('versionInfo')!r}"
+
+          # CI / build / SBOM tooling must NOT be represented as NATURE runtime
+          # components. This asserts the clean semantic result -- it does not
+          # filter or rewrite the SBOM.
+          contaminants = {
+              "build", "pyproject-hooks", "pyproject-api",
+              "sbom4python", "lib4sbom", "lib4package", "lib4vex",
+              "pip", "setuptools", "wheel", "packaging",
+              "requests", "urllib3", "certifi", "idna", "charset-normalizer",
+              "semantic-version", "defusedxml", "rich", "pygments",
+              "markdown-it-py", "mdurl", "packageurl-python", "python-dateutil",
+              "six", "toml", "tomli",
+          }
+          leaked = sorted(n for n in names if n in contaminants)
+          assert not leaked, (
+              f"CI/build/SBOM tooling leaked into the SBOM as components: {leaked}. "
+              "The SBOM must represent only the NATURE distribution (zero runtime deps)."
+          )
+          print(f"SBOM OK: spdxVersion={spdx_version}, packages={sorted(names)}")
+          PY
+
+      - name: Generate dist/SHA256SUMS
+        run: |
+          python - <<'PY'
+          import hashlib, pathlib
+
+          dist = pathlib.Path("dist")
+          # Exactly the intended release-preparation artifacts, lexical order.
+          artifacts = sorted([
+              "nature-agent-validator-0.1.0a1.spdx.json",
+              "nature_agent_validator-0.1.0a1-py3-none-any.whl",
+              "nature_agent_validator-0.1.0a1.tar.gz",
+          ])
+          lines = []
+          for name in artifacts:
+              data = (dist / name).read_bytes()
+              assert data, f"refusing to hash an empty artifact: {name}"
+              lines.append(f"{hashlib.sha256(data).hexdigest()}  {name}")
+          (dist / "SHA256SUMS").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          print("\n".join(lines))
+          PY
+
+      - name: Verify dist/SHA256SUMS independently
+        run: |
+          python - <<'PY'
+          import hashlib, pathlib, re
+
+          dist = pathlib.Path("dist")
+          sums = dist / "SHA256SUMS"
+          assert sums.is_file(), "SHA256SUMS is missing"
+
+          expected = {
+              "nature-agent-validator-0.1.0a1.spdx.json",
+              "nature_agent_validator-0.1.0a1-py3-none-any.whl",
+              "nature_agent_validator-0.1.0a1.tar.gz",
+          }
+          line_re = re.compile(r"^([0-9a-f]{64})  (\S.*)$")
+          seen = []
+          for i, raw in enumerate(sums.read_text(encoding="utf-8").splitlines(), 1):
+              if not raw:
+                  continue
+              m = line_re.match(raw)
+              assert m, f"malformed SHA256SUMS line {i}: {raw!r}"
+              digest, name = m.group(1), m.group(2)
+              assert name != "SHA256SUMS", "SHA256SUMS must not hash itself"
+              assert name in expected, f"unexpected artifact listed in SHA256SUMS: {name}"
+              assert name not in seen, f"duplicate entry in SHA256SUMS: {name}"
+              target = dist / name
+              assert target.is_file(), f"artifact listed in SHA256SUMS is missing: {name}"
+              actual = hashlib.sha256(target.read_bytes()).hexdigest()
+              assert actual == digest, f"SHA-256 mismatch for {name}"
+              seen.append(name)
+          missing = expected - set(seen)
+          assert not missing, f"expected artifact(s) omitted from SHA256SUMS: {sorted(missing)}"
+          assert seen == sorted(seen), f"SHA256SUMS is not in lexical order: {seen}"
+          print("SHA256SUMS verified (lexical order):")
+          print(sums.read_text(encoding="utf-8").rstrip())
+          PY
