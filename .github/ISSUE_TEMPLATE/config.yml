@@ -1,0 +1,9 @@
+# Blank issues stay available -- the three templates above cover the common
+# cases, but nothing forces every issue into one of them.
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/nature-ai-corp/nature-agent-validator/security/advisories/new
+    about: >-
+      For a suspected vulnerability, use GitHub Private Vulnerability
+      Reporting instead of a public issue. See SECURITY.md for details.

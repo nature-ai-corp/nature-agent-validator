@@ -1,0 +1,100 @@
+name: Bug report
+description: Report reproducible unexpected NATURE Agent Validator behavior.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug.
+
+        **If this might be a security vulnerability, stop.** Do not file it
+        here — use GitHub **Private Vulnerability Reporting** (the
+        repository's **Security** tab → "Report a vulnerability") instead.
+        See [`SECURITY.md`](https://github.com/nature-ai-corp/nature-agent-validator/blob/main/SECURITY.md).
+
+        **Do not include** secrets, credentials, API keys, tokens, private
+        customer data, or sensitive evidence content in this report.
+
+  - type: input
+    id: version
+    attributes:
+      label: NATURE Agent Validator version
+      description: Output of `nav --version`.
+      placeholder: "nav 0.1.0a1"
+    validations:
+      required: true
+
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      placeholder: "3.12 / 3.13 / 3.14"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "e.g. Ubuntu 24.04, macOS 14, Windows 11 + WSL2"
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Scenario or minimal reproduction
+      description: >
+        Paste a minimal Scenario JSON (or the exact steps) that reproduces
+        the issue. Replace any credential, secret, or private target detail
+        with an obvious placeholder before posting.
+      render: json
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: command-output
+    attributes:
+      label: Relevant command and output
+      description: >
+        The exact `nav ...` command you ran and its output (human, `--json`,
+        or `--junit`). Redact secrets and any private data first.
+      render: shell
+
+  - type: dropdown
+    id: evidence
+    attributes:
+      label: Was evidence involved?
+      description: >
+        Did the scenario use `evidence_field`, `evidence_event_exists`, or
+        `evidence_event_not_exists`?
+      options:
+        - "No — black-box, no evidence involved"
+        - "Yes — evidence was involved"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: security-check
+    attributes:
+      label: Security check
+      options:
+        - label: >
+            This is not a suspected security vulnerability, and this report
+            contains no secrets, credentials, tokens, or private data.
+          required: true

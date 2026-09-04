@@ -1,0 +1,81 @@
+name: Validation scenario proposal
+description: >-
+  Share a real validation use case, without needing a full design proposal.
+title: "[Scenario]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this to describe a validation use case you'd find valuable — a
+        realistic thing you'd want to check about an Agent's behavior.
+        Describe it in general, vendor-neutral terms; no proprietary or
+        customer data is needed.
+
+  - type: input
+    id: target-type
+    attributes:
+      label: Agent / target type (high level)
+      placeholder: "e.g. HTTP chat API, tool-using agent, RAG assistant"
+    validations:
+      required: true
+
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Behavior to validate
+    validations:
+      required: true
+
+  - type: textarea
+    id: observable
+    attributes:
+      label: Expected observable result
+      description: >
+        What should be visible in the response (status, text, a JSON field,
+        latency, …)?
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Optional evidence available (if any)
+      description: >
+        e.g. an authorization decision, a tool-execution event. Leave blank
+        if the target is black-box only — evidence is never required.
+    validations:
+      required: false
+
+  - type: textarea
+    id: pass-condition
+    attributes:
+      label: PASS condition
+    validations:
+      required: true
+
+  - type: textarea
+    id: fail-condition
+    attributes:
+      label: FAIL condition
+    validations:
+      required: true
+
+  - type: textarea
+    id: error-condition
+    attributes:
+      label: ERROR condition (if relevant)
+      description: >
+        e.g. a transport or configuration failure that should never be
+        treated as a failed expectation.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: vendor-neutral
+    attributes:
+      label: Vendor neutrality
+      options:
+        - label: >
+            This proposal is described in general, vendor-neutral terms and
+            contains no proprietary customer data.
+          required: true

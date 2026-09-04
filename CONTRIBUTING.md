@@ -10,6 +10,16 @@ respect those boundaries are very welcome.
   problem or use case and the change you have in mind so scope can be agreed
   before you invest time.
 - Keep pull requests focused. One logical change per PR.
+
+### Reporting issues and proposing validation scenarios
+
+Pick the template that fits when opening a new issue:
+
+- **Bug** — reproducible unexpected behavior: [Bug report](https://github.com/nature-ai-corp/nature-agent-validator/issues/new?template=bug_report.yml)
+- **Feature** — a capability or CLI/UX improvement: [Feature request](https://github.com/nature-ai-corp/nature-agent-validator/issues/new?template=feature_request.yml)
+- **Scenario** — a real validation use case, no design proposal needed: [Validation scenario proposal](https://github.com/nature-ai-corp/nature-agent-validator/issues/new?template=validation_scenario_proposal.yml)
+- **Suspected security vulnerability** — do **not** open a public issue; see
+  [`SECURITY.md`](SECURITY.md).
 - By contributing you agree that your contribution is licensed under the
   project's [Apache License 2.0](LICENSE). There is no separate CLA or DCO
   sign-off process at this time.

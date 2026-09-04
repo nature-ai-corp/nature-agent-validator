@@ -1,0 +1,60 @@
+name: Feature request
+description: Propose a NATURE Agent Validator capability or UX improvement.
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Opening this issue proposes an idea for discussion. It does **not**
+        imply the feature will be accepted or implemented — this is an early
+        Alpha project with a deliberately small, firmly-bounded surface (see
+        `CONTRIBUTING.md`).
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / use case
+      description: What are you trying to validate or accomplish?
+    validations:
+      required: true
+
+  - type: textarea
+    id: desired
+    attributes:
+      label: Desired behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: gap
+    attributes:
+      label: Why existing capabilities are insufficient
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which area does this affect?
+      multiple: true
+      options:
+        - Deterministic assertions
+        - Evidence Contract
+        - Adapters (target / transport)
+        - Reporting (JSON / JUnit)
+        - CLI / scenario authoring
+        - Documentation
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: portability
+    attributes:
+      label: Portability / vendor-neutral considerations
+      description: >
+        Does this depend on a specific vendor, model provider, or proprietary
+        system? NATURE Agent Validator stays vendor-neutral and
+        model-independent — please describe how this request fits that.
+    validations:
+      required: false
