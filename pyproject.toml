@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nature-agent-validator"
+version = "0.0.1"
+description = "Standalone, no-model-first framework for validating whether an AI agent behaved as expected."
+readme = "README.md"
+requires-python = ">=3.12,<3.15"
+authors = [{ name = "NATURE AI CORP" }]
+keywords = ["agent", "validation", "testing", "assurance", "ai-agents"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Testing",
+    "Typing :: Typed",
+]
+
+# Phase 0: zero runtime dependencies. The deterministic core runs on the
+# Python standard library alone -- no LLM, no HTTP client, no evaluator model.
+dependencies = []
+
+[project.optional-dependencies]
+# No third-party development dependencies are approved yet (OSS review pending).
+# Tests run on the standard library:  python -m unittest discover -s tests -t .
+dev = []
+
+[project.scripts]
+nav = "nature_agent_validator.cli.main:main"
+
+[project.urls]
+Repository = "https://github.com/nature-ai-corp/nature-agent-validator"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+nature_agent_validator = ["py.typed"]
