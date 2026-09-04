@@ -23,6 +23,13 @@ like any other response, with its ``Location`` header preserved in
 ``NormalizedResult.headers``. Configurable redirect support is deferred to a
 later architecture decision.
 
+Optional evidence (Phase 2): if ``target.config`` declares ``evidence_field``
+and the JSON response body contains that top-level key, its value is parsed as
+an :class:`~nature_agent_validator.evidence.EvidenceRecord` (``{coverage,
+events}``). No JSONPath, no nested paths, no header transport, no vendor
+schema. A present-but-malformed evidence field is an ``AdapterError`` (→
+``ERROR``) -- it is never silently downgraded to "no evidence".
+
 This module is imported lazily by :func:`nature_agent_validator.adapters.registry.build_adapter`
 so that merely importing the core package pulls in no networking modules.
 """
@@ -36,7 +43,8 @@ import urllib.request
 from typing import TYPE_CHECKING, Any, Mapping
 from urllib.parse import urlsplit
 
-from nature_agent_validator.errors import AdapterError
+from nature_agent_validator.errors import AdapterError, EvidenceError
+from nature_agent_validator.evidence import EvidenceRecord
 
 from .base import AdapterResponse, TargetAdapter
 from .result import NormalizedResult
@@ -91,6 +99,8 @@ class HttpAdapter(TargetAdapter):
       body, otherwise ``GET``
     * ``headers`` -- optional mapping of static request headers
     * ``timeout_seconds`` -- optional; defaults to ``30``
+    * ``evidence_field`` -- optional; a top-level JSON response key to parse as
+      an ``EvidenceRecord`` (see the module docstring)
 
     The request body is ``scenario.request.payload``:
 
@@ -112,6 +122,7 @@ class HttpAdapter(TargetAdapter):
         method: str | None = None,
         headers: Mapping[str, Any] | None = None,
         timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
+        evidence_field: str | None = None,
     ) -> None:
         scheme = urlsplit(url).scheme.lower()
         if scheme not in _ALLOWED_SCHEMES:
@@ -125,6 +136,7 @@ class HttpAdapter(TargetAdapter):
             str(k): str(v) for k, v in dict(headers or {}).items()
         }
         self._timeout = float(timeout_seconds)
+        self._evidence_field = evidence_field
 
     @classmethod
     def from_config(cls, config: Mapping[str, Any]) -> "HttpAdapter":
@@ -151,11 +163,18 @@ class HttpAdapter(TargetAdapter):
             raise AdapterError(
                 f"http adapter: 'method' must be a string, got {type(method).__name__}"
             )
+        evidence_field = config.get("evidence_field")
+        if evidence_field is not None and not isinstance(evidence_field, str):
+            raise AdapterError(
+                "http adapter: 'evidence_field' must be a string, got "
+                f"{type(evidence_field).__name__}"
+            )
         return cls(
             url=str(url),
             method=method,
             headers=headers,
             timeout_seconds=timeout,
+            evidence_field=evidence_field,
         )
 
     # -- internal ------------------------------------------------------------
@@ -227,8 +246,27 @@ class HttpAdapter(TargetAdapter):
             latency_ms=elapsed_ms,
             error=None,
         )
-        # HTTP is a black-box transport: no structured evidence is available.
-        return AdapterResponse(result=result, evidence=None)
+        return AdapterResponse(
+            result=result, evidence=self._extract_evidence(result.body)
+        )
+
+    def _extract_evidence(self, body: Any) -> "EvidenceRecord | None":
+        """Optional, portable evidence extraction.
+
+        Returns ``None`` (black-box) unless ``evidence_field`` is configured
+        *and* the JSON body carries that top-level key. A present-but-malformed
+        value is raised as an ``AdapterError`` so it is never mistaken for
+        trusted evidence.
+        """
+        field = self._evidence_field
+        if field is None or not isinstance(body, Mapping) or field not in body:
+            return None
+        try:
+            return EvidenceRecord.from_dict(body[field])
+        except EvidenceError as exc:
+            raise AdapterError(
+                f"HTTP response evidence in field {field!r} is malformed: {exc}"
+            ) from exc
 
 
 def _response_headers(message: Any) -> dict[str, str]:

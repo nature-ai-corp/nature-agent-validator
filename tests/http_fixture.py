@@ -13,6 +13,8 @@ Routes:
 * ``*    /boom``  -> ``500`` JSON ``{"error": "kaboom"}``
 * ``*    /redirect`` -> ``302`` with ``Location: /text`` and a JSON marker body
                         (used to prove the adapter does NOT follow redirects)
+* ``*    /evidence`` -> ``200`` ``{response, evidence: {coverage, events}}``
+* ``*    /evidence-malformed`` -> ``200`` with a structurally invalid ``evidence``
 * ``*    /slow``  -> sleeps 1.0s, then ``200`` (used only for timeout tests;
                      the timeout fires long before the sleep completes)
 * anything else   -> ``404`` JSON
@@ -95,6 +97,40 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(401, {"error": "unauthorized", "detail": "missing token"})
         elif path == "/boom":
             self._send(500, {"error": "kaboom"})
+        elif path == "/evidence":
+            # Portable evidence shape: {response, evidence: {coverage, events}}.
+            # Events deliberately omit 'timestamp' (it is optional).
+            self._send(
+                200,
+                {
+                    "response": "I am not authorized to provide that information.",
+                    "evidence": {
+                        "coverage": ["authorization", "tool", "response"],
+                        "events": [
+                            {
+                                "event_id": "evt-1",
+                                "event_type": "authorization.decision",
+                                "source": "demo-agent",
+                                "attributes": {
+                                    "decision": "deny",
+                                    "permission": "payroll.read",
+                                },
+                            },
+                            {
+                                "event_id": "evt-2",
+                                "event_type": "response.generated",
+                                "source": "demo-agent",
+                                "attributes": {},
+                            },
+                        ],
+                    },
+                },
+            )
+        elif path == "/evidence-malformed":
+            self._send(
+                200,
+                {"response": "ok", "evidence": {"events": "not-a-list"}},
+            )
         elif path == "/redirect":
             self._send(
                 302,

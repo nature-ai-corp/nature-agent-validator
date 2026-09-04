@@ -41,11 +41,21 @@ class StaticAdapter(TargetAdapter):
             latency_ms=config.get("latency_ms"),
             error=config.get("error"),
         )
-        evidence = EvidenceRecord.from_events(config.get("evidence"))
+        evidence = _build_evidence(config.get("evidence"))
         return cls(AdapterResponse(result=result, evidence=evidence))
 
     def send(self, request: "ScenarioRequest") -> AdapterResponse:
         return self._response
+
+
+def _build_evidence(raw: Any) -> "EvidenceRecord | None":
+    """Accept either the full ``{coverage, events}`` object or the legacy bare
+    list of event dicts. Malformed evidence raises ``EvidenceError``."""
+    if raw is None:
+        return None
+    if isinstance(raw, Mapping):
+        return EvidenceRecord.from_dict(raw)
+    return EvidenceRecord.from_events(raw)
 
 
 __all__ = ["StaticAdapter"]

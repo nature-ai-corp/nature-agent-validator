@@ -20,7 +20,8 @@ let a model, the network, or a container become a core requirement.
 Package dependency direction (no cycles):
 
 ```
-evidence      (leaf)
+errors        (leaf)
+evidence      -> errors              (raises EvidenceError on malformed input)
 scenario      (leaf; AssertionSpec referenced only for typing)
 evaluators    (leaf; boundary only)
 adapters      -> evidence, scenario  (adapters.http -> urllib, imported lazily only)
@@ -64,15 +65,16 @@ The **only** component that knows how to reach a target.
   standard library (`urllib.request` / `urllib.error`) and normalizes the
   response. Config: `url` (required, `http`/`https` only), `method` (defaults
   to `POST` with a body, else `GET`), `headers` (static), `timeout_seconds`
-  (default `30`). The body is `request.payload` — string/bytes sent as-is,
-  anything else JSON-encoded with an added `Content-Type: application/json`
-  when absent. A completed exchange, **including 3xx/4xx/5xx**, becomes a
-  `NormalizedResult`; a transport failure (connection refused, DNS, timeout,
-  malformed URL, unsupported scheme) raises `AdapterError` → `ERROR`. The
-  adapter exposes no evidence (`evidence=None`). **Redirects are not followed**
-  (Phase 1): a `3xx` is normalized like any response, `Location` kept in
-  `NormalizedResult.headers`; configurable redirect support is a later
-  decision.
+  (default `30`), `evidence_field` (optional, Phase 2 — a top-level JSON
+  response key parsed as `{coverage, events}`). The body is `request.payload` —
+  string/bytes sent as-is, anything else JSON-encoded with an added
+  `Content-Type: application/json` when absent. A completed exchange,
+  **including 3xx/4xx/5xx**, becomes a `NormalizedResult`; a transport failure
+  (connection refused, DNS, timeout, malformed URL, unsupported scheme) raises
+  `AdapterError` → `ERROR`. **Redirects are not followed** (Phase 1): a `3xx`
+  is normalized like any response, `Location` kept in `NormalizedResult.headers`;
+  configurable redirect support is a later decision. Evidence: `None` unless
+  `evidence_field` is set and present in the JSON body; malformed → `AdapterError`.
 - `registry.py`: a private table mapping an adapter name to a
   declaratively-constructible class, plus the `build_adapter(target)` factory
   used by the runner and CLI. `static` is in the eager table; `http` is
@@ -120,36 +122,86 @@ Phase 0 ships this subset (all standard-library):
 | `regex_match` | response text matches a regular expression |
 | `json_path_equals` | value at a dotted body path equals a value |
 | `latency_below` | measured latency within a millisecond budget |
-| `evidence_event_present` / `evidence_event_absent` | an evidence event of a type (with an optional attribute subset) was / was not observed |
+| `evidence_event_exists` / `evidence_event_not_exists` | a matching evidence event (type + optional exact attribute subset) was / was not observed — **coverage-aware**, see below |
 
-In Phase 0 new built-in checks are added as `Assertion` subclasses in
+New built-in checks are added as `Assertion` subclasses in
 `assertions/builtin.py`; the scenario format, runner, and result shape do not
 change. A public registration API for third-party assertions is deferred to a
 later phase.
 
-### `SKIPPED` and principle P0-3
+### `SKIPPED`, coverage, and the negative-evidence rule (P0-3 / Phase 2)
 
-Evidence assertions return `SKIPPED` (not `FAIL`) when no evidence is
-available. A skipped assertion never makes a scenario `FAIL`, and its `passed`
+Evidence assertions return `SKIPPED` (not `FAIL`) when they cannot be
+evaluated. A skipped assertion never makes a scenario `FAIL`, and its `passed`
 convenience is `None` (never `False`). This is what lets one scenario
-definition run unchanged against both a black-box target and an
-evidence-enabled one.
+definition run unchanged against a black-box target and an evidence-enabled
+one.
+
+Both `evidence_event_exists` and `evidence_event_not_exists` are `SKIPPED`
+unless **(a)** an `EvidenceRecord` is present **and** **(b)** the event type's
+namespace is in `record.coverage`. Namespace = the prefix of `event_type`
+before the first `.` (`tool.executed` → `tool`; a dotless type is its own
+namespace). Only then:
+
+- `evidence_event_exists` → `PASS` if ≥1 matching event, else `FAIL`.
+- `evidence_event_not_exists` → `PASS` only if 0 matching events, else `FAIL`.
+  It never passes on absence alone — *no evidence of an action is not evidence
+  the action did not happen*.
+
+Attribute matching is an exact subset (`all(event.attributes[k] == v)` for the
+given keys). No regex, no filter DSL. Coverage is never inferred from the
+events present.
 
 ## Evidence Contract  (`evidence/`)
 
 Deliberately **not** the full Agent Evidence SDK — the minimum the Validator
 needs, kept small, generic, versioned, and optional.
 
-- `EvidenceEvent`: `event_id`, `event_type`, `timestamp`, `source`,
-  `attributes`.
-- `EvidenceRecord`: ordered `events` + `contract_version`
-  (`EVIDENCE_CONTRACT_VERSION`, currently `0.1.0`), with helpers
+- `EvidenceEvent`: `event_id`, `event_type`, `timestamp` (**optional**;
+  `None` when the target did not stamp it; ISO-8601, a trailing `Z` accepted),
+  `source`, `attributes`.
+- `EvidenceRecord`: ordered `events` + `coverage` + `contract_version`
+  (`EVIDENCE_CONTRACT_VERSION`, `0.1.0`), with helpers `covers(namespace)`,
   `event_types()`, `has_event_type()`, `of_type()`.
+- `coverage` is an **open, string-based** tuple of evidence namespaces the
+  target claims to cover (`authorization`, `tool`, `knowledge`, `workflow`,
+  …). It is de-duplicated, order-preserving, and **never inferred** from the
+  events present. It is what lets a negative assertion tell "observed and
+  absent" from "not observable" (see the Assertion section).
+- `evidence_namespace(event_type)` — the prefix before the first `.`.
 - `KNOWN_EVENT_TYPES` is a **non-binding** vocabulary (`request.received`,
   `agent.selected`, `authorization.decision`, `model.invoked`,
   `skill.invoked`, `knowledge.accessed`, `tool.requested`, `tool.executed`,
-  `workflow.transition`, `response.generated`). No enterprise schema is
-  frozen. Nothing in this package evaluates anything (P0-6).
+  `workflow.transition`, `response.generated`). `event_type` and `coverage`
+  namespaces stay open strings — no enterprise schema is frozen, no closed
+  enum. Nothing in this package evaluates anything (P0-6).
+- `from_dict` / `from_events` are **strict**: a non-object record, non-list
+  `events`/`coverage`, non-string coverage entries, an event missing
+  `event_id` / `event_type`, a non-object `attributes`, or an unparseable
+  `timestamp` raise `EvidenceError`. Malformed optional evidence is surfaced
+  (as `ERROR` via the runner), never silently downgraded to "no evidence".
+
+### Trust boundary
+
+Evidence is **observational input supplied by the target**. It is not
+cryptographically verified, tamper-proof, independently attested, or
+compliance-grade. The Validator judges the supplied evidence deterministically;
+provenance/trust assurance is future scope.
+
+### Evidence input path
+
+The runner is evidence-source agnostic: an adapter returns
+`AdapterResponse(result, evidence)` and the runner passes `evidence` straight
+into the `AssertionContext`. It never knows how evidence was obtained.
+
+- **StaticAdapter** — `config.evidence` accepts either the full
+  `{coverage, events}` object or the legacy bare list of event dicts (no
+  coverage).
+- **HttpAdapter** — opt-in via `config.evidence_field`: a **top-level** JSON
+  response key whose value is parsed as `{coverage, events}`. No JSONPath, no
+  nested path DSL, no response-header transport, no vendor schema. Field
+  absent / body not JSON ⇒ no evidence (black-box). Field present but
+  structurally invalid ⇒ `AdapterError` ⇒ `ERROR`.
 
 ## Evaluator Provider  (`evaluators/`)
 
@@ -173,19 +225,27 @@ dependency (P0-2). None are imported or integrated now.
 | `overall_status` | `PASS` / `FAIL` / `ERROR` |
 | `assertion_results` | tuple of `AssertionResult` |
 | `execution_metadata` | `adapter`, `started_at`, `finished_at`, `duration_ms` |
-| `evidence_summary` | `available`, `event_count`, `event_types`, `contract_version` |
+| `evidence_summary` | `available`, `event_count`, `event_types`, `coverage`, `contract_version` |
 | `errors` | validator-side failure messages |
 
-`to_dict()` produces a JSON-serializable structure; `summary_line()` a one-line
-human summary; `counts()` the pass/fail/skipped tally.
+`to_dict()` produces a JSON-serializable structure — it includes a top-level
+`counts` object (`{pass, fail, skipped}`) so a consumer sees at a glance that a
+`PASS` may still contain `SKIPPED` assertions. `summary_line()` is a one-line
+human summary (with `(N skipped)` when any); `counts()` the pass/fail/skipped
+tally. The CLI human view additionally prints an `assertions:` count line and
+an `evidence:` line (availability, event count, declared coverage).
 
 ### Outcome model
 
-- **PASS** — every evaluated assertion passed (`SKIPPED` do not count against).
-- **FAIL** — at least one assertion was evaluated and failed.
+Statuses stay **`PASS` / `FAIL` / `ERROR`** only — no `PARTIAL` / `PASS_WITH_SKIPS`.
+
+- **PASS** — every evaluated assertion passed. May contain `SKIPPED` assertions
+  (they do not count against); the counts make that explicit.
+- **FAIL** — at least one assertion was evaluated and failed. `FAIL` overrides
+  any number of `SKIPPED`.
 - **ERROR** — the Validator could not complete the run: the adapter could not
-  be built, `adapter.send` raised, or an assertion definition was broken
-  (unknown type, malformed config).
+  be built, `adapter.send` raised, an assertion definition was broken (unknown
+  type, malformed config), or supplied evidence was structurally malformed.
 
 `ERROR` and assertion failure are never conflated. A `NormalizedResult` that
 merely carries a transport `error` string is still a result: assertions judge

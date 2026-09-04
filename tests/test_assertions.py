@@ -38,8 +38,8 @@ class BuiltinAssertionTests(unittest.TestCase):
                 "regex_match",
                 "json_path_equals",
                 "latency_below",
-                "evidence_event_present",
-                "evidence_event_absent",
+                "evidence_event_exists",
+                "evidence_event_not_exists",
             },
         )
 
@@ -99,41 +99,55 @@ class BuiltinAssertionTests(unittest.TestCase):
                     "authorization.decision",
                     datetime(2026, 9, 3, tzinfo=timezone.utc),
                     "authz",
-                    {"decision": "denied"},
+                    {"decision": "deny"},
                 ),
-            )
+            ),
+            coverage=("authorization", "tool"),
         )
 
-    def test_evidence_present(self) -> None:
+    def test_evidence_exists(self) -> None:
         ctx = _ctx(evidence=self._evidence())
         self.assertEqual(
-            _run("evidence_event_present", {"event_type": "authorization.decision", "attributes": {"decision": "denied"}}, ctx),
+            _run("evidence_event_exists", {"event_type": "authorization.decision", "attributes": {"decision": "deny"}}, ctx),
             AssertionOutcome.PASS,
         )
+        # covered namespace ('tool'), no matching event -> FAIL, not SKIP
         self.assertEqual(
-            _run("evidence_event_present", {"event_type": "tool.executed"}, ctx),
+            _run("evidence_event_exists", {"event_type": "tool.executed"}, ctx),
             AssertionOutcome.FAIL,
         )
 
-    def test_evidence_absent(self) -> None:
+    def test_evidence_not_exists(self) -> None:
         ctx = _ctx(evidence=self._evidence())
         self.assertEqual(
-            _run("evidence_event_absent", {"event_type": "tool.executed", "attributes": {"tool": "payroll.read"}}, ctx),
+            _run("evidence_event_not_exists", {"event_type": "tool.executed", "attributes": {"tool_name": "payroll.read"}}, ctx),
             AssertionOutcome.PASS,
         )
         self.assertEqual(
-            _run("evidence_event_absent", {"event_type": "authorization.decision"}, ctx),
+            _run("evidence_event_not_exists", {"event_type": "authorization.decision"}, ctx),
             AssertionOutcome.FAIL,
         )
 
     def test_evidence_assertions_skip_when_no_evidence(self) -> None:
         ctx = _ctx(evidence=None)
         self.assertEqual(
-            _run("evidence_event_present", {"event_type": "authorization.decision"}, ctx),
+            _run("evidence_event_exists", {"event_type": "authorization.decision"}, ctx),
             AssertionOutcome.SKIPPED,
         )
         self.assertEqual(
-            _run("evidence_event_absent", {"event_type": "tool.executed"}, ctx),
+            _run("evidence_event_not_exists", {"event_type": "tool.executed"}, ctx),
+            AssertionOutcome.SKIPPED,
+        )
+
+    def test_evidence_assertions_skip_when_namespace_not_covered(self) -> None:
+        # evidence exists but 'knowledge' is not in declared coverage
+        ctx = _ctx(evidence=self._evidence())
+        self.assertEqual(
+            _run("evidence_event_exists", {"event_type": "knowledge.accessed"}, ctx),
+            AssertionOutcome.SKIPPED,
+        )
+        self.assertEqual(
+            _run("evidence_event_not_exists", {"event_type": "knowledge.accessed"}, ctx),
             AssertionOutcome.SKIPPED,
         )
 

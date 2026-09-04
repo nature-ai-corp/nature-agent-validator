@@ -91,7 +91,7 @@ class RunnerTests(unittest.TestCase):
                 {"status": 200, "body": {"answer": "not authorized"}},
                 (
                     AssertionSpec("t", "contains", {"value": "not authorized"}),
-                    AssertionSpec("ev", "evidence_event_absent", {"event_type": "tool.executed"}),
+                    AssertionSpec("ev", "evidence_event_not_exists", {"event_type": "tool.executed"}),
                 ),
             )
         )
@@ -101,6 +101,20 @@ class RunnerTests(unittest.TestCase):
         skipped = next(r for r in result.assertion_results if r.skipped)
         self.assertIsNone(skipped.passed)
         self.assertIsNone(skipped.to_dict()["passed"])
+
+    def test_fail_overrides_skipped_assertions(self) -> None:
+        result = Runner().run(
+            _scenario(
+                {"status": 500, "body": {"answer": "boom"}},
+                (
+                    AssertionSpec("s", "status_equals", {"value": 200}),
+                    AssertionSpec("ev", "evidence_event_not_exists", {"event_type": "tool.executed"}),
+                ),
+            )
+        )
+        self.assertIs(result.overall_status, OverallStatus.FAIL)
+        self.assertEqual(result.errors, ())
+        self.assertEqual(result.counts(), {"pass": 0, "fail": 1, "skipped": 1})
 
     def test_run_returns_transport_error_result_as_fail(self) -> None:
         # adapter returns a result carrying a transport error -> assertions judge it

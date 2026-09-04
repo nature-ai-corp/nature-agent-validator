@@ -30,6 +30,7 @@ from nature_agent_validator.assertions import (
 from nature_agent_validator.errors import (
     AdapterError,
     AssertionConfigError,
+    EvidenceError,
     NatureValidatorError,
     ScenarioError,
     UnknownAssertionType,
@@ -94,4 +95,5 @@ __all__ = [
     "AdapterError",
     "AssertionConfigError",
     "UnknownAssertionType",
+    "EvidenceError",
 ]

@@ -29,10 +29,21 @@ class UnknownAssertionType(NatureValidatorError):
     """No assertion implementation is registered for the requested type name."""
 
 
+class EvidenceError(NatureValidatorError):
+    """Optional evidence supplied by a target could not be parsed or is
+    structurally invalid.
+
+    Malformed optional evidence is never silently downgraded to "no evidence":
+    it is surfaced (as ``ERROR`` via the runner) so it cannot be mistaken for
+    trusted evidence.
+    """
+
+
 __all__ = [
     "NatureValidatorError",
     "ScenarioError",
     "AdapterError",
     "AssertionConfigError",
     "UnknownAssertionType",
+    "EvidenceError",
 ]

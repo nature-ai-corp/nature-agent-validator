@@ -13,10 +13,15 @@ Implemented types:
 * ``not_contains``           -- response text does not contain a substring
 * ``regex_match``            -- response text matches a regular expression
 * ``json_path_equals``       -- value at a dotted body path equals a value
-* ``latency_below``          -- measured latency is within a millisecond budget
-* ``evidence_event_present`` -- an evidence event of a type (and optional
-                                attribute subset) was observed
-* ``evidence_event_absent``  -- no such evidence event was observed
+* ``latency_below``              -- measured latency is within a millisecond budget
+* ``evidence_event_exists``      -- an evidence event of a type (and optional
+                                    exact attribute subset) was observed
+* ``evidence_event_not_exists``  -- no such evidence event was observed
+
+The two evidence assertions are *coverage-aware* (Phase 2): they are
+``SKIPPED`` unless evidence is available **and** the event type's namespace is
+in the record's declared coverage. Absence of an event never supports a
+negative assertion PASS unless that namespace is covered.
 """
 
 from __future__ import annotations
@@ -25,6 +30,7 @@ import re
 from typing import Any, Mapping
 
 from nature_agent_validator.errors import AssertionConfigError
+from nature_agent_validator.evidence import evidence_namespace
 
 from .base import Assertion
 from .context import AssertionContext
@@ -225,12 +231,24 @@ class LatencyBelowAssertion(Assertion):
 
 
 class _EvidenceAssertion(Assertion):
-    """Shared logic for evidence presence/absence checks."""
+    """Shared logic for the coverage-aware evidence existence checks.
 
-    def _matches(self, context: AssertionContext) -> list[Any]:
-        event_type = str(self._require("event_type"))
+    ``_guard`` enforces the mandatory rule: no evidence, or a namespace that is
+    not in the declared coverage, yields ``SKIPPED`` -- for *both* the positive
+    and the negative check. Absence is only meaningful within declared
+    coverage.
+    """
+
+    def _event_type(self) -> str:
+        return str(self._require("event_type"))
+
+    def _namespace(self) -> str:
+        return evidence_namespace(self._event_type())
+
+    def _matching_events(self, context: AssertionContext) -> list[Any]:
+        event_type = self._event_type()
         attributes = self.config.get("attributes", {}) or {}
-        assert context.evidence is not None  # guarded by caller
+        assert context.evidence is not None  # guarded by _guard
         return [
             e
             for e in context.evidence
@@ -244,19 +262,35 @@ class _EvidenceAssertion(Assertion):
             return f"event {event_type!r} with attributes {dict(attributes)!r}"
         return f"event {event_type!r}"
 
-
-@_register
-class EvidenceEventPresentAssertion(_EvidenceAssertion):
-    type = "evidence_event_present"
-
-    def evaluate(self, context: AssertionContext) -> AssertionResult:
+    def _guard(self, context: AssertionContext) -> AssertionResult | None:
+        namespace = self._namespace()
         if context.evidence is None:
             return self._skip(
-                expected=f"{self._describe()} present",
+                expected=self._describe(),
                 observed="no evidence available",
-                message="target environment exposed no evidence; not evaluated",
+                message="target exposed no evidence; not evaluated",
             )
-        matches = self._matches(context)
+        if not context.evidence.covers(namespace):
+            return self._skip(
+                expected=self._describe(),
+                observed=f"declared coverage {list(context.evidence.coverage)}",
+                message=(
+                    f"evidence namespace {namespace!r} is not in declared "
+                    "coverage; not evaluated"
+                ),
+            )
+        return None
+
+
+@_register
+class EvidenceEventExistsAssertion(_EvidenceAssertion):
+    type = "evidence_event_exists"
+
+    def evaluate(self, context: AssertionContext) -> AssertionResult:
+        skipped = self._guard(context)
+        if skipped is not None:
+            return skipped
+        matches = self._matching_events(context)
         if matches:
             return self._pass(
                 expected=f"{self._describe()} present",
@@ -270,17 +304,14 @@ class EvidenceEventPresentAssertion(_EvidenceAssertion):
 
 
 @_register
-class EvidenceEventAbsentAssertion(_EvidenceAssertion):
-    type = "evidence_event_absent"
+class EvidenceEventNotExistsAssertion(_EvidenceAssertion):
+    type = "evidence_event_not_exists"
 
     def evaluate(self, context: AssertionContext) -> AssertionResult:
-        if context.evidence is None:
-            return self._skip(
-                expected=f"{self._describe()} absent",
-                observed="no evidence available",
-                message="target environment exposed no evidence; not evaluated",
-            )
-        matches = self._matches(context)
+        skipped = self._guard(context)
+        if skipped is not None:
+            return skipped
+        matches = self._matching_events(context)
         if not matches:
             return self._pass(
                 expected=f"{self._describe()} absent", observed="0 matching events"
@@ -295,8 +326,8 @@ class EvidenceEventAbsentAssertion(_EvidenceAssertion):
 __all__ = [
     "ContainsAssertion",
     "EqualsAssertion",
-    "EvidenceEventAbsentAssertion",
-    "EvidenceEventPresentAssertion",
+    "EvidenceEventExistsAssertion",
+    "EvidenceEventNotExistsAssertion",
     "JsonPathEqualsAssertion",
     "LatencyBelowAssertion",
     "NotContainsAssertion",

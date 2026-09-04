@@ -77,6 +77,20 @@ def _run_validate(args: argparse.Namespace) -> int:
     else:
         for result in results:
             print(result.summary_line())
+            c = result.counts()
+            print(
+                f"    assertions: {c['pass']} passed, {c['fail']} failed, "
+                f"{c['skipped']} skipped"
+            )
+            es = result.evidence_summary
+            if es.available:
+                cov = ", ".join(es.coverage) if es.coverage else "(none declared)"
+                print(
+                    f"    evidence: available -- {es.event_count} event(s); "
+                    f"coverage: {cov}"
+                )
+            else:
+                print("    evidence: not available (black-box)")
             for ar in result.assertion_results:
                 if ar.outcome.value != "PASS":
                     print(f"    - {ar.assertion_id} [{ar.outcome.value}] {ar.message}")

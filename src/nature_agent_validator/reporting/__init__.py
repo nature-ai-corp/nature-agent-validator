@@ -50,6 +50,9 @@ class EvidenceSummary:
     event_count: int = 0
     event_types: tuple[str, ...] = ()
     contract_version: str | None = None
+    #: Namespaces the target declared it covers (Phase 2). Empty when evidence
+    #: is unavailable or the target declared no coverage.
+    coverage: tuple[str, ...] = ()
 
     @classmethod
     def from_record(cls, record: "EvidenceRecord | None") -> "EvidenceSummary":
@@ -60,6 +63,7 @@ class EvidenceSummary:
             event_count=len(record),
             event_types=record.event_types(),
             contract_version=record.contract_version,
+            coverage=record.coverage,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -67,6 +71,7 @@ class EvidenceSummary:
             "available": self.available,
             "event_count": self.event_count,
             "event_types": list(self.event_types),
+            "coverage": list(self.coverage),
             "contract_version": self.contract_version,
         }
 
@@ -123,6 +128,9 @@ class ValidationResult:
             "scenario_id": self.scenario_id,
             "scenario_name": self.scenario_name,
             "overall_status": self.overall_status.value,
+            # PASS may still contain SKIPPED assertions -- the counts make that
+            # explicit for consumers of the JSON report.
+            "counts": self.counts(),
             "assertion_results": [r.to_dict() for r in self.assertion_results],
             "execution_metadata": (
                 self.execution_metadata.to_dict()

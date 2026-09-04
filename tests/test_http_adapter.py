@@ -310,7 +310,7 @@ class HttpAdapterThroughRunnerTests(unittest.TestCase):
                         AssertionSpec("status", "status_equals", {"value": 200}),
                         AssertionSpec(
                             "no-tool",
-                            "evidence_event_absent",
+                            "evidence_event_not_exists",
                             {"event_type": "tool.executed"},
                         ),
                     ),
