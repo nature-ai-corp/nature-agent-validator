@@ -1,0 +1,500 @@
+# NATURE Agent Validator -- Release control plane (Phase 7C-C2-C).
+#
+# This workflow is release CONTROL-PLANE CODE ONLY. It is never triggered
+# automatically (workflow_dispatch only -- no push/pull_request/release/
+# schedule triggers) and it must be dispatched deliberately by a human.
+#
+# The release SUBJECT is frozen and independent of where this file lives:
+#
+#     tag:    v0.1.0a1
+#     commit: 2ad880bf9bb416e1b047666c764d079d1738b5bd
+#
+# This file will live on a LATER main commit than the frozen release commit.
+# The job therefore explicitly checks out refs/tags/v0.1.0a1 and hard-fails
+# unless the resolved commit equals the frozen commit above -- it never
+# treats github.sha (the commit this workflow_dispatch run itself launched
+# from) as release-source authority.
+#
+# One job, one runner, one dist/: the exact same build produces the wheel,
+# sdist, SPDX SBOM, and SHA256SUMS that are attested AND uploaded AND
+# downloaded-back-and-reverified below. No upload-artifact/download-artifact,
+# no artifact transfer between jobs, no rebuild between attestation and
+# upload.
+#
+# The build / metadata / clean-room-install / SBOM / checksum validation
+# logic below is copied verbatim from the already-proven `build` job in
+# .github/workflows/ci.yml (unchanged by this file) so the release path
+# reuses exactly the same authoritative checks CI already runs on every push.
+#
+# Tooling (all pre-approved, exact pins only -- see docs/release-tooling.md
+# for checkout/setup-python/build/sbom4python; actions/attest is approved
+# for this implementation only, per the Phase 7C-C2-C handoff):
+#   actions/checkout      v7.0.0   9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+#   actions/setup-python   v7.0.0   5fda3b95a4ea91299a34e894583c3862153e4b97
+#   actions/attest         v4.2.2   1e69f48acb82d1966a394da916b4c1698aa569d6
+#   PyPA build             build==1.6.0        (CI/release tooling only)
+#   sbom4python             sbom4python==0.12.6 (CI/release tooling only)
+# GitHub CLI (`gh`, preinstalled on the runner) creates the release and
+# uploads/downloads assets -- no third-party release/upload Action is used.
+#
+# NOTE on attestation (see steps "Build provenance attestation" and "SBOM
+# attestation"): actions/attest-build-provenance and actions/attest-sbom are
+# explicitly NOT used (handoff constraint) -- only the bare actions/attest
+# action, exact-SHA pinned, is used for both. The provenance call supplies
+# only `subject-path` (no sbom-path/predicate-type/predicate/predicate-path/
+# push-to-registry), which invokes the action's native build-provenance mode.
+# The SBOM call supplies `subject-path` + `sbom-path` (no custom predicate).
+
+name: Release
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: release-v0.1.0a1
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  release:
+    name: build, attest, and publish v0.1.0a1
+    runs-on: ubuntu-latest
+    # Least privilege for what a release genuinely requires:
+    #   contents: write        GitHub Release create / asset upload / edit
+    #   id-token: write        Sigstore OIDC signing (actions/attest)
+    #   attestations: write    GitHub Artifact Attestations storage
+    # No packages/security-events/actions/deployments/issues/pull-requests
+    # permission. No secret beyond the ephemeral, GitHub-provided token.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Check out the frozen release tag
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: refs/tags/v0.1.0a1
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Release identity guard (fail closed on any mismatch)
+        run: |
+          set -euo pipefail
+          EXPECTED="2ad880bf9bb416e1b047666c764d079d1738b5bd"
+
+          HEAD_SHA="$(git rev-parse HEAD)"
+          TAG_SHA="$(git rev-list -n 1 refs/tags/v0.1.0a1)"
+
+          echo "expected release commit : $EXPECTED"
+          echo "checked-out HEAD        : $HEAD_SHA"
+          echo "refs/tags/v0.1.0a1  ->   : $TAG_SHA"
+
+          if [ "$HEAD_SHA" != "$EXPECTED" ]; then
+            echo "::error::checked-out HEAD ($HEAD_SHA) does not match the frozen release commit ($EXPECTED)"
+            exit 1
+          fi
+          if [ "$TAG_SHA" != "$EXPECTED" ]; then
+            echo "::error::refs/tags/v0.1.0a1 resolves to $TAG_SHA, not the frozen release commit ($EXPECTED)"
+            exit 1
+          fi
+
+          # Authoritative version source (same constant pyproject.toml sources
+          # dynamically -- see [tool.setuptools.dynamic] in pyproject.toml).
+          if ! grep -qx '__version__ = "0.1.0a1"' src/nature_agent_validator/__init__.py; then
+            echo "::error::src/nature_agent_validator/__init__.py does not contain exactly __version__ = \"0.1.0a1\""
+            exit 1
+          fi
+
+          # NOTE: github.sha is deliberately NOT used above -- for a
+          # workflow_dispatch run it is the control-plane (main) commit this
+          # run was launched from, not the release source. Full package
+          # -metadata consistency (built wheel/sdist METADATA "Version:
+          # 0.1.0a1" and the installed importlib.metadata version) is proven
+          # below using the identical mechanism ci.yml already proves on
+          # every push -- not a new/second mechanism.
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Set SOURCE_DATE_EPOCH from the frozen release commit
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> "$GITHUB_ENV"
+
+      - name: Install PyPA build (pinned)
+        run: python -m pip install "build==1.6.0"
+
+      - name: Build sdist and wheel (single build, this job only)
+        # The configured backend (setuptools.build_meta) is unchanged; `build`
+        # provisions setuptools>=77 in an isolated environment per pyproject.
+        run: python -m build
+
+      - name: Check expected artifact filenames
+        run: |
+          ls -l dist
+          test -f "dist/nature_agent_validator-0.1.0a1.tar.gz"
+          test -f "dist/nature_agent_validator-0.1.0a1-py3-none-any.whl"
+
+      - name: Verify distribution metadata and bundled license files
+        # Verbatim from ci.yml's build job -- the proven authoritative check.
+        run: |
+          python - <<'PY'
+          import glob, tarfile, zipfile
+
+          whl = glob.glob("dist/*.whl")[0]
+          zf = zipfile.ZipFile(whl)
+          names = zf.namelist()
+          meta_name = next(n for n in names if n.endswith(".dist-info/METADATA"))
+          meta = zf.read(meta_name).decode()
+          print("--- wheel METADATA (head) ---")
+          print("\n".join(meta.splitlines()[:20]))
+          assert "Name: nature-agent-validator" in meta, "wheel: Name"
+          assert "Version: 0.1.0a1" in meta, "wheel: Version"
+          assert "License-Expression: Apache-2.0" in meta, "wheel: License-Expression"
+          assert any(n.endswith(".dist-info/licenses/LICENSE") for n in names), "wheel: bundled LICENSE"
+          assert any(n.endswith(".dist-info/licenses/NOTICE") for n in names), "wheel: bundled NOTICE"
+
+          sdist = glob.glob("dist/*.tar.gz")[0]
+          tf = tarfile.open(sdist)
+          tnames = tf.getnames()
+          assert any(n.endswith("/LICENSE") for n in tnames), "sdist: LICENSE"
+          assert any(n.endswith("/NOTICE") for n in tnames), "sdist: NOTICE"
+          pkg_name = next(n for n in tnames if n.endswith("/PKG-INFO"))
+          pkg = tf.extractfile(pkg_name).read().decode()
+          assert "Name: nature-agent-validator" in pkg, "sdist: Name"
+          assert "Version: 0.1.0a1" in pkg, "sdist: Version"
+          assert "License-Expression: Apache-2.0" in pkg, "sdist: License-Expression"
+          print("distribution metadata and license files OK")
+          PY
+
+      - name: Clean-room install of the built wheel
+        # Verbatim from ci.yml's build job.
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/wheel-venv"
+          "$RUNNER_TEMP/wheel-venv/bin/python" -m pip install --no-deps \
+            "dist/nature_agent_validator-0.1.0a1-py3-none-any.whl"
+
+      - name: Installed-wheel smoke checks (run outside the source tree)
+        # Verbatim from ci.yml's build job.
+        run: |
+          set -euo pipefail
+          venv="$RUNNER_TEMP/wheel-venv"
+          smoke="$RUNNER_TEMP/smoke"
+          mkdir -p "$smoke"
+          cd "$smoke"
+          "$venv/bin/nav" --version | tee nav-version.txt
+          grep -qx "nav 0.1.0a1" nav-version.txt
+          "$venv/bin/nav" --help
+          "$venv/bin/nav" scenario describe
+          "$venv/bin/python" -c "import nature_agent_validator as n, importlib.metadata as m; assert n.__version__ == '0.1.0a1', n.__version__; assert m.version('nature-agent-validator') == '0.1.0a1', m.version('nature-agent-validator'); print('installed wheel import OK:', n.__version__)"
+
+      - name: Install the SBOM generator (pinned; CI/release tooling only)
+        # Verbatim from ci.yml's build job.
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/wheel-venv/bin/python" -m pip install "sbom4python==0.12.6"
+          echo "--- resolved SBOM-tooling closure in the clean-room venv (provenance record) ---"
+          "$RUNNER_TEMP/wheel-venv/bin/python" -m pip list --format=freeze
+
+      - name: Generate the SPDX JSON SBOM for the installed NATURE distribution
+        # Verbatim from ci.yml's build job.
+        run: |
+          set -euo pipefail
+          venv="$RUNNER_TEMP/wheel-venv"
+          out="$GITHUB_WORKSPACE/dist/nature-agent-validator-0.1.0a1.spdx.json"
+          cd "$RUNNER_TEMP"
+          "$venv/bin/sbom4python" \
+            --module nature_agent_validator \
+            --sbom spdx \
+            --format json \
+            --output-file "$out"
+          test -s "$out"
+
+      - name: Validate the SBOM (stdlib only; strict positive allowlist)
+        # Verbatim from ci.yml's build job -- unfiltered, un-edited SBOM,
+        # validated as-is. ALLOWED_PACKAGE_NAMES remains exactly
+        # {"nature-agent-validator"}.
+        run: |
+          python - <<'PY'
+          import json, os
+
+          path = "dist/nature-agent-validator-0.1.0a1.spdx.json"
+          assert os.path.isfile(path), "SBOM file was not created"
+          assert os.path.getsize(path) > 0, "SBOM file is empty"
+          with open(path, encoding="utf-8") as fh:
+              doc = json.load(fh)  # raises if the file is not valid JSON
+
+          spdx_version = doc.get("spdxVersion")
+          assert spdx_version in {"SPDX-2.2", "SPDX-2.3"}, f"unexpected spdxVersion: {spdx_version!r}"
+          assert doc.get("SPDXID") == "SPDXRef-DOCUMENT", f"SPDXID: {doc.get('SPDXID')!r}"
+          assert doc.get("dataLicense"), "SBOM has no dataLicense"
+          assert doc.get("name"), "SBOM document has no name"
+
+          packages = doc.get("packages") or []
+          assert packages, "SBOM contains no packages"
+
+          def norm(value):
+              return (value or "").strip().lower().replace("_", "-")
+
+          names = sorted(norm(p.get("name")) for p in packages)
+
+          ALLOWED_PACKAGE_NAMES = frozenset({"nature-agent-validator"})
+
+          unexpected = sorted(set(names) - ALLOWED_PACKAGE_NAMES)
+          assert not unexpected, (
+              f"SBOM contains package(s) outside the allowlist "
+              f"{sorted(ALLOWED_PACKAGE_NAMES)}: {unexpected}. The product SBOM must "
+              "describe only the NATURE distribution (zero runtime dependencies). "
+              "Do not filter the SBOM -- investigate why the generator emitted these "
+              "and, only if legitimate, add the exact name to ALLOWED_PACKAGE_NAMES "
+              "after review."
+          )
+
+          assert "nature-agent-validator" in set(names), f"NATURE package absent; packages={names}"
+          nav = next(p for p in packages if norm(p.get("name")) == "nature-agent-validator")
+          assert nav.get("versionInfo") == "0.1.0a1", f"NATURE versionInfo={nav.get('versionInfo')!r}"
+
+          print(f"SBOM OK: spdxVersion={spdx_version}, packages={names}")
+          PY
+
+      - name: Generate dist/SHA256SUMS
+        # Verbatim from ci.yml's build job.
+        run: |
+          python - <<'PY'
+          import hashlib, pathlib
+
+          dist = pathlib.Path("dist")
+          artifacts = sorted([
+              "nature-agent-validator-0.1.0a1.spdx.json",
+              "nature_agent_validator-0.1.0a1-py3-none-any.whl",
+              "nature_agent_validator-0.1.0a1.tar.gz",
+          ])
+          lines = []
+          for name in artifacts:
+              data = (dist / name).read_bytes()
+              assert data, f"refusing to hash an empty artifact: {name}"
+              lines.append(f"{hashlib.sha256(data).hexdigest()}  {name}")
+          (dist / "SHA256SUMS").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          print("\n".join(lines))
+          PY
+
+      - name: Verify dist/SHA256SUMS independently
+        # Verbatim from ci.yml's build job.
+        run: |
+          python - <<'PY'
+          import hashlib, pathlib, re
+
+          dist = pathlib.Path("dist")
+          sums = dist / "SHA256SUMS"
+          assert sums.is_file(), "SHA256SUMS is missing"
+
+          expected = {
+              "nature-agent-validator-0.1.0a1.spdx.json",
+              "nature_agent_validator-0.1.0a1-py3-none-any.whl",
+              "nature_agent_validator-0.1.0a1.tar.gz",
+          }
+          line_re = re.compile(r"^([0-9a-f]{64})  (\S.*)$")
+          seen = []
+          for i, raw in enumerate(sums.read_text(encoding="utf-8").splitlines(), 1):
+              if not raw:
+                  continue
+              m = line_re.match(raw)
+              assert m, f"malformed SHA256SUMS line {i}: {raw!r}"
+              digest, name = m.group(1), m.group(2)
+              assert name != "SHA256SUMS", "SHA256SUMS must not hash itself"
+              assert name in expected, f"unexpected artifact listed in SHA256SUMS: {name}"
+              assert name not in seen, f"duplicate entry in SHA256SUMS: {name}"
+              target = dist / name
+              assert target.is_file(), f"artifact listed in SHA256SUMS is missing: {name}"
+              actual = hashlib.sha256(target.read_bytes()).hexdigest()
+              assert actual == digest, f"SHA-256 mismatch for {name}"
+              seen.append(name)
+          missing = expected - set(seen)
+          assert not missing, f"expected artifact(s) omitted from SHA256SUMS: {sorted(missing)}"
+          assert seen == sorted(seen), f"SHA256SUMS is not in lexical order: {seen}"
+          print("SHA256SUMS verified (lexical order):")
+          print(sums.read_text(encoding="utf-8").rstrip())
+          PY
+
+      - name: dist/ census -- exactly the four release assets, nothing else
+        run: |
+          set -euo pipefail
+          cd dist
+          actual="$(ls -1 | sort)"
+          expected="$(printf '%s\n' \
+            SHA256SUMS \
+            nature-agent-validator-0.1.0a1.spdx.json \
+            nature_agent_validator-0.1.0a1-py3-none-any.whl \
+            nature_agent_validator-0.1.0a1.tar.gz | sort)"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::dist/ does not contain exactly the four expected release assets"
+            echo "--- expected ---"; echo "$expected"
+            echo "--- actual ---"; echo "$actual"
+            exit 1
+          fi
+          echo "dist/ census OK: exactly the four expected files"
+
+      - name: Build provenance attestation (all four release assets, native mode)
+        # Only subject-path is supplied -- no sbom-path/predicate-type/
+        # predicate/predicate-path/push-to-registry -- which invokes
+        # actions/attest's native build-provenance mode.
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/nature_agent_validator-0.1.0a1-py3-none-any.whl
+            dist/nature_agent_validator-0.1.0a1.tar.gz
+            dist/nature-agent-validator-0.1.0a1.spdx.json
+            dist/SHA256SUMS
+
+      - name: SBOM attestation (wheel and sdist subjects)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/nature_agent_validator-0.1.0a1-py3-none-any.whl
+            dist/nature_agent_validator-0.1.0a1.tar.gz
+          sbom-path: dist/nature-agent-validator-0.1.0a1.spdx.json
+
+      - name: Refuse to overwrite an existing release (fail closed)
+        run: |
+          set -euo pipefail
+          if gh release view v0.1.0a1 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::release v0.1.0a1 already exists; refusing to overwrite or clobber it"
+            exit 1
+          fi
+          echo "no existing v0.1.0a1 release found -- safe to create a draft"
+
+      - name: Create the draft GitHub Pre-release with the exact attested files
+        # No rebuild between attestation and upload: these are the same
+        # dist/ files the previous two steps just attested.
+        run: |
+          set -euo pipefail
+          gh release create v0.1.0a1 \
+            --repo "$GITHUB_REPOSITORY" \
+            --target 2ad880bf9bb416e1b047666c764d079d1738b5bd \
+            --verify-tag \
+            --title "NATURE Agent Validator 0.1.0a1" \
+            --notes-file RELEASE_NOTES_0.1.0a1.md \
+            --prerelease \
+            --draft \
+            dist/nature_agent_validator-0.1.0a1-py3-none-any.whl \
+            dist/nature_agent_validator-0.1.0a1.tar.gz \
+            dist/nature-agent-validator-0.1.0a1.spdx.json \
+            dist/SHA256SUMS
+
+      - name: Download-back verification of the draft release
+        run: |
+          set -euo pipefail
+          dl="$RUNNER_TEMP/release-download"
+          mkdir -p "$dl"
+          gh release download v0.1.0a1 --repo "$GITHUB_REPOSITORY" --dir "$dl"
+
+          # 1. exact asset census
+          actual="$(cd "$dl" && ls -1 | sort)"
+          expected="$(printf '%s\n' \
+            SHA256SUMS \
+            nature-agent-validator-0.1.0a1.spdx.json \
+            nature_agent_validator-0.1.0a1-py3-none-any.whl \
+            nature_agent_validator-0.1.0a1.tar.gz | sort)"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::downloaded draft-release asset census mismatch"
+            echo "--- expected ---"; echo "$expected"
+            echo "--- actual ---"; echo "$actual"
+            exit 1
+          fi
+
+          # 2/3. SHA256SUMS lists exactly the three distributables and verifies
+          (cd "$dl" && sha256sum -c SHA256SUMS)
+
+          # 4. downloaded bytes identical to the pre-upload dist/ bytes
+          for f in nature-agent-validator-0.1.0a1.spdx.json \
+                   nature_agent_validator-0.1.0a1-py3-none-any.whl \
+                   nature_agent_validator-0.1.0a1.tar.gz \
+                   SHA256SUMS; do
+            cmp -s "$dl/$f" "dist/$f" || {
+              echo "::error::downloaded $f differs from the pre-upload build -- refusing to publish"
+              exit 1
+            }
+          done
+          echo "downloaded assets are byte-identical to the attested/pre-upload dist/ files"
+
+      - name: Verify draft release metadata
+        run: |
+          set -euo pipefail
+          gh release view v0.1.0a1 --repo "$GITHUB_REPOSITORY" \
+            --json tagName,isDraft,isPrerelease,targetCommitish \
+            > "$RUNNER_TEMP/release-meta-draft.json"
+          python - <<'PY'
+          import json, os
+
+          path = os.path.join(os.environ["RUNNER_TEMP"], "release-meta-draft.json")
+          meta = json.load(open(path, encoding="utf-8"))
+          assert meta["tagName"] == "v0.1.0a1", meta
+          assert meta["isDraft"] is True, meta
+          assert meta["isPrerelease"] is True, meta
+          assert meta["targetCommitish"] == "2ad880bf9bb416e1b047666c764d079d1738b5bd", meta
+          print("draft release metadata OK:", meta)
+          PY
+
+      - name: Verify attestations on the downloaded draft assets
+        # Fail closed: set -euo pipefail, no `|| true` anywhere -- any
+        # `gh attestation verify` failure stops the job before publish.
+        run: |
+          set -euo pipefail
+          dl="$RUNNER_TEMP/release-download"
+
+          echo "--- build provenance attestation: wheel ---"
+          gh attestation verify "$dl/nature_agent_validator-0.1.0a1-py3-none-any.whl" \
+            --repo "$GITHUB_REPOSITORY"
+
+          echo "--- build provenance attestation: sdist ---"
+          gh attestation verify "$dl/nature_agent_validator-0.1.0a1.tar.gz" \
+            --repo "$GITHUB_REPOSITORY"
+
+          echo "--- build provenance attestation: SPDX SBOM ---"
+          gh attestation verify "$dl/nature-agent-validator-0.1.0a1.spdx.json" \
+            --repo "$GITHUB_REPOSITORY"
+
+          echo "--- build provenance attestation: SHA256SUMS ---"
+          gh attestation verify "$dl/SHA256SUMS" \
+            --repo "$GITHUB_REPOSITORY"
+
+          # Explicit SPDX SBOM-attestation predicate verification for the
+          # wheel and sdist specifically (not a substring/heuristic check).
+          echo "--- explicit SPDX SBOM attestation predicate: wheel ---"
+          gh attestation verify "$dl/nature_agent_validator-0.1.0a1-py3-none-any.whl" \
+            --repo "$GITHUB_REPOSITORY" \
+            --predicate-type https://spdx.dev/Document/v2.3
+
+          echo "--- explicit SPDX SBOM attestation predicate: sdist ---"
+          gh attestation verify "$dl/nature_agent_validator-0.1.0a1.tar.gz" \
+            --repo "$GITHUB_REPOSITORY" \
+            --predicate-type https://spdx.dev/Document/v2.3
+
+          echo "attestation verification OK: build provenance on all four assets, plus the explicit SPDX SBOM predicate on wheel and sdist"
+
+      - name: Publish -- flip the draft to a published pre-release
+        # Only reached if every build/package/SBOM/checksum/census/attestation
+        # /download-back check above has passed.
+        run: |
+          set -euo pipefail
+          gh release edit v0.1.0a1 --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
+
+      - name: Verify final published release state
+        run: |
+          set -euo pipefail
+          gh release view v0.1.0a1 --repo "$GITHUB_REPOSITORY" \
+            --json tagName,isDraft,isPrerelease \
+            > "$RUNNER_TEMP/release-meta-final.json"
+          python - <<'PY'
+          import json, os
+
+          path = os.path.join(os.environ["RUNNER_TEMP"], "release-meta-final.json")
+          meta = json.load(open(path, encoding="utf-8"))
+          assert meta["tagName"] == "v0.1.0a1", meta
+          assert meta["isDraft"] is False, meta
+          assert meta["isPrerelease"] is True, meta
+          print("final published release metadata OK:", meta)
+          PY
