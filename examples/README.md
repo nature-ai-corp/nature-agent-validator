@@ -35,3 +35,11 @@ evidence-enabled PASS). Run it with `nav validate-suite examples/suite`, or
 emit a CI-portable JUnit report with `--junit` / `--junit-output FILE`. It is
 a sub-directory, so `nav validate examples/` does not pick it up. See
 [`suite/README.md`](suite/README.md).
+
+## Environments (Phase 5)
+
+[`environments/`](environments/) holds example `--environment` files: exact
+`url` / `timeout` / normal-header overrides, and a `secret_headers` reference
+that injects `os.environ["AGENT_TOKEN"]` as a bearer token without the value
+ever touching a scenario, a result, or a report. See
+[`environments/README.md`](environments/README.md).

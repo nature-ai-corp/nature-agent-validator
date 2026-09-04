@@ -39,6 +39,16 @@ class EvidenceError(NatureValidatorError):
     """
 
 
+class ConfigurationError(NatureValidatorError):
+    """An environment configuration file is missing, malformed, or applies an
+    override that is not allowed (Phase 5).
+
+    Fail-closed: ambiguous or unsupported environment configuration is always
+    an error, never silently ignored. Messages never contain a resolved secret
+    value (only, at most, the *name* of a missing environment variable).
+    """
+
+
 __all__ = [
     "NatureValidatorError",
     "ScenarioError",
@@ -46,4 +56,5 @@ __all__ = [
     "AssertionConfigError",
     "UnknownAssertionType",
     "EvidenceError",
+    "ConfigurationError",
 ]

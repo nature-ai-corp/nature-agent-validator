@@ -1,0 +1,16 @@
+{
+  "name": "staging",
+  "target": {
+    "url": "https://staging.example.com/chat",
+    "timeout": 10,
+    "headers": {
+      "X-Environment": "staging"
+    },
+    "secret_headers": {
+      "Authorization": {
+        "env": "AGENT_TOKEN",
+        "prefix": "Bearer "
+      }
+    }
+  }
+}

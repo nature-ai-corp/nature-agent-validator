@@ -59,3 +59,16 @@ parallel execution, retries, fail-fast, watch mode, or remote scenario
 repositories. No historical result storage, HTML/JUnit reporting, or CI/CD
 configuration. Suite execution reuses the single-scenario engine unchanged;
 `ERROR`/`FAIL`/`PASS` keep their meaning.
+
+## Non-goals for Phase 5 (environments & secrets)
+
+An `EnvironmentConfig` carries **runtime connection overrides only** for HTTP
+targets (`url` / `timeout` / `headers` / `secret_headers`); it can never change
+validation intent. The validator does **not** own secret storage: no `.env` /
+dotenv loader, no encrypted secret files, no secret CLI arguments, no cloud
+secret managers (AWS/Azure/GCP/Vault/1Password/Kubernetes). Process environment
+variables are the only secret source, and secret **references** — never values
+— are the only thing an environment file holds. No `base_url` / relative URLs /
+URL templates, no `${VAR}` interpolation of any field, no environment or
+profile inheritance, no config registry or auto-discovery, no Basic/OAuth
+composition. No result- or report-schema changes.

@@ -30,8 +30,14 @@ reporting     -> assertions, evidence
 runner        -> adapters, assertions, scenario, reporting, evidence
 suite         -> runner, scenario, scenario.serialization, reporting, errors   (Phase 3)
 reporting.junit -> suite, reporting, assertions.result   (Phase 4; not imported by reporting/__init__)
-cli           -> runner, suite, reporting.junit, scenario.serialization, adapters.registry
+configuration -> scenario, errors   (Phase 5; no os.environ read here -- refs only)
+cli           -> runner, suite, reporting.junit, configuration, scenario.serialization, adapters.registry
 ```
+
+`adapters.http` gained one runtime edge in Phase 5: it reads `os.environ`
+inside `send()` to resolve secret-header references. It does **not** import
+`configuration`; the wire format between them is the plain
+`{"header", "env", "prefix"}` reference list carried in `target.config`.
 
 ## Scenario  (`scenario/`)
 
@@ -323,14 +329,56 @@ changes no status; `reporting/__init__.py` does not import it, so importing
   `ExecutionMetadata.duration_ms` already in the result; omitted when a
   scenario has no `execution_metadata`.
 
+## Environment configuration  (`configuration/`, Phase 5)
+
+Runtime **connection overrides only** for HTTP targets, plus **secret-safe**
+header injection. Not a config-management system: no registry, inheritance,
+profiles, `base_url`, templating / `${VAR}` interpolation, `.env`, or external
+secret managers.
+
+- `SecretHeaderRef(env: str, prefix: str = "")` — a *reference*: an
+  environment-variable name + an optional literal prefix. Never a value. Its
+  default dataclass `repr` shows only the name and prefix.
+- `EnvironmentConfig(name, url=None, timeout=None, headers={}, secret_headers={})`
+  — frozen. `name` is informational identity only (not a registry key).
+  `has_target_overrides` is false for a name-only config.
+- `load_environment(path) -> EnvironmentConfig` — parse + validate an explicit
+  JSON file. **Fail-closed**: missing/non-file path, invalid JSON, non-object
+  root, missing/empty `name`, unknown root or `target` field, non-string
+  `url`, non-numeric `timeout`, non-string header name/value, malformed
+  `secret_headers`, unknown `SecretHeaderRef` field, an `env` name not
+  matching `[A-Za-z_][A-Za-z0-9_]*`, or a case-insensitive duplicate secret
+  header — each raises `ConfigurationError`.
+- `apply_environment(scenario, env) -> Scenario` — the **single shared path**
+  used by both CLI commands. Returns a **new** effective `Scenario`
+  (`dataclasses.replace`); the original is never mutated. Only the HTTP
+  `target` is touched: `url` (exact override), `timeout` → the Phase-1
+  `timeout_seconds` key, `headers` overlaid case-insensitively (environment
+  wins, no duplicate semantic headers), and `secret_headers` injected into
+  `target.config` as a `{"header","env","prefix"}` **reference list**. A
+  normal-vs-secret header collision (case-insensitive) or any target override
+  applied to a non-`http` adapter is a `ConfigurationError`. A name-only
+  environment is a no-op for any adapter.
+- **Secret lifetime:** `configuration` never reads `os.environ`. The resolved
+  value is produced only inside `HttpAdapter._resolve_secret_headers` (called
+  from `send`), added to the one outbound `headers` dict, and discarded. It is
+  never stored on the adapter, in a `NormalizedResult` / `ValidationResult` /
+  `SuiteResult`, or in any exception message. Unset or empty variable →
+  `AdapterError` that names the variable, never a value → run `ERROR`.
+- The existing HTTP error handlers already reference only `self._url` /
+  `self._timeout` and never stringify the `Request` or the headers dict, so no
+  error-path normalization was needed for Phase 5.
+
 ## CLI  (`cli/`)
 
-`nav validate <file-or-dir> [--json]`. Loads `.json` scenario(s), runs them
-via the `build_adapter` factory, prints a text summary or full JSON.
+`nav validate <file-or-dir> [--json] [--environment FILE]`. Loads `.json`
+scenario(s), applies the environment (if any) via the shared
+`_apply_environment` helper, runs them via the `build_adapter` factory, prints
+a text summary or full JSON.
 
-`nav validate-suite <directory> [--json | --junit | --junit-output FILE]`.
-`load_suite → SuiteRunner → SuiteResult`, then one output mode (mutually
-exclusive, enforced by an argparse group):
+`nav validate-suite <directory> [--json | --junit | --junit-output FILE] [--environment FILE]`.
+`load_suite` → (optional `_apply_environment`) → `SuiteRunner` → `SuiteResult`,
+then one output mode (mutually exclusive, enforced by an argparse group):
 
 | mode | stdout | file |
 | --- | --- | --- |
@@ -341,10 +389,11 @@ exclusive, enforced by an argparse group):
 
 Exit codes, both commands: `0` overall PASS, `1` overall FAIL, `2` overall
 ERROR **or** a load failure (missing path, non-directory suite, no `.json`
-files, malformed/invalid scenario) **or** a JUnit report-write failure, `3`
-argparse usage (argparse also exits `2` for a conflicting flag combination). A
-successful JUnit export never changes the exit code. Command naming is not
-frozen.
+files, malformed/invalid scenario, **or a malformed / incompatible environment
+config**) **or** a JUnit report-write failure, `3` argparse usage (argparse
+also exits `2` for a conflicting flag combination). A successful JUnit export
+never changes the exit code. `--environment` composes with every output mode.
+Command naming is not frozen.
 
 The CLI needed **no changes** for Phase 1: an `http` scenario runs through the
 same `load_scenarios → Runner.run_many → build_adapter` path as a `static`

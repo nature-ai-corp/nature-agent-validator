@@ -15,6 +15,17 @@ Routes:
                         (used to prove the adapter does NOT follow redirects)
 * ``*    /evidence`` -> ``200`` ``{response, evidence: {coverage, events}}``
 * ``*    /evidence-malformed`` -> ``200`` with a structurally invalid ``evidence``
+* ``*    /capture`` -> ``200`` ``{"answer": "ok"}`` and records the received
+                       request headers on the server as ``last_request_headers``
+                       (lower-cased). The response body does NOT echo them, so
+                       secret-leak tests can assert a token was *sent* without
+                       the token ever appearing in a response.
+* ``*    /reflect-body``   -> ``200`` JSON that echoes the request
+                             ``Authorization`` header value into the body
+* ``*    /reflect-header`` -> ``200`` ``{"answer":"ok"}`` plus a response header
+                             ``X-Echoed-Auth`` carrying the request auth value
+* ``*    /reflect-error``  -> ``401`` JSON that echoes the request auth value
+                             (exercises the HTTPError normalization path)
 * ``*    /slow``  -> sleeps 1.0s, then ``200`` (used only for timeout tests;
                      the timeout fires long before the sleep completes)
 * anything else   -> ``404`` JSON
@@ -131,6 +142,29 @@ class _Handler(BaseHTTPRequestHandler):
                 200,
                 {"response": "ok", "evidence": {"events": "not-a-list"}},
             )
+        elif path == "/capture":
+            # record what the client sent; do NOT echo it back in the body
+            self.server.last_request_headers = {  # type: ignore[attr-defined]
+                k.lower(): v for k, v in self.headers.items()
+            }
+            self._send(200, {"answer": "ok"})
+        elif path == "/reflect-body":
+            # a hostile/buggy target that reflects the credential into the body
+            self._send(
+                200,
+                {"answer": "ok", "seen_authorization": self.headers.get("Authorization", "")},
+            )
+        elif path == "/reflect-header":
+            self._send(
+                200,
+                {"answer": "ok"},
+                extra_headers={"X-Echoed-Auth": self.headers.get("Authorization", "")},
+            )
+        elif path == "/reflect-error":
+            self._send(
+                401,
+                {"error": "denied", "token_was": self.headers.get("Authorization", "")},
+            )
         elif path == "/redirect":
             self._send(
                 302,
@@ -185,6 +219,11 @@ class LocalHTTPServer:
 
     def url(self, path: str) -> str:
         return f"{self.base_url}{path}"
+
+    @property
+    def last_request_headers(self) -> dict[str, str]:
+        """Lower-cased headers of the most recent request to ``/capture``."""
+        return getattr(self._server, "last_request_headers", {})
 
     def __enter__(self) -> "LocalHTTPServer":
         self._thread.start()

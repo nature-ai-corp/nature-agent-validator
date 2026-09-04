@@ -30,6 +30,21 @@ events}``). No JSONPath, no nested paths, no header transport, no vendor
 schema. A present-but-malformed evidence field is an ``AdapterError`` (→
 ``ERROR``) -- it is never silently downgraded to "no evidence".
 
+Optional secret headers (Phase 5): ``target.config['secret_headers']`` is a
+list of *references* ``{"header", "env", "prefix"}`` -- never resolved values.
+Each is resolved from :data:`os.environ` inside :meth:`HttpAdapter.send`, added
+to the outbound request headers for that one send, and never stored on the
+adapter, in a :class:`NormalizedResult`, or in an exception message. An unset
+or empty environment variable is an ``AdapterError`` (fail-closed); the error
+names the variable but never a value.
+
+Secret-reflection guard (Phase 5 remediation): if a target reflects an exact
+resolved secret value back in its response -- body text, parsed JSON, or a
+response header -- the adapter fails closed with ``AdapterError`` **before**
+any of that material is placed in a :class:`NormalizedResult`. The fixed
+diagnostic ("target response contained a resolved secret value") never
+contains the secret, the reflected response, or any header.
+
 This module is imported lazily by :func:`nature_agent_validator.adapters.registry.build_adapter`
 so that merely importing the core package pulls in no networking modules.
 """
@@ -37,6 +52,8 @@ so that merely importing the core package pulls in no networking modules.
 from __future__ import annotations
 
 import json
+import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -54,6 +71,7 @@ if TYPE_CHECKING:
 
 _DEFAULT_TIMEOUT_SECONDS = 30.0
 _ALLOWED_SCHEMES = ("http", "https")
+_ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -89,6 +107,40 @@ def _try_parse_json(text: str) -> Any:
         return None
 
 
+def _parse_secret_header_refs(raw: Any) -> list[tuple[str, str, str]]:
+    """Validate the ``{header, env, prefix}`` reference list produced by an
+    environment config. References only -- this never sees a resolved value."""
+    if raw is None:
+        return []
+    if not isinstance(raw, (list, tuple)):
+        raise AdapterError(
+            f"http adapter: 'secret_headers' must be a list, got {type(raw).__name__}"
+        )
+    refs: list[tuple[str, str, str]] = []
+    seen: set[str] = set()
+    for entry in raw:
+        if not isinstance(entry, Mapping):
+            raise AdapterError("http adapter: each 'secret_headers' entry must be an object")
+        header_name = entry.get("header")
+        env_name = entry.get("env")
+        prefix = entry.get("prefix", "")
+        if not isinstance(header_name, str) or header_name == "":
+            raise AdapterError("http adapter: 'secret_headers' entry needs a non-empty 'header'")
+        if not isinstance(env_name, str) or not _ENV_NAME_RE.fullmatch(env_name):
+            raise AdapterError(
+                f"http adapter: 'secret_headers' entry has an invalid 'env' name: {env_name!r}"
+            )
+        if not isinstance(prefix, str):
+            raise AdapterError("http adapter: 'secret_headers' entry 'prefix' must be a string")
+        if header_name.lower() in seen:
+            raise AdapterError(
+                f"http adapter: duplicate secret header (case-insensitive): {header_name!r}"
+            )
+        seen.add(header_name.lower())
+        refs.append((header_name, env_name, prefix))
+    return refs
+
+
 class HttpAdapter(TargetAdapter):
     """Send ``scenario.request`` to an HTTP endpoint and normalize the response.
 
@@ -101,6 +153,8 @@ class HttpAdapter(TargetAdapter):
     * ``timeout_seconds`` -- optional; defaults to ``30``
     * ``evidence_field`` -- optional; a top-level JSON response key to parse as
       an ``EvidenceRecord`` (see the module docstring)
+    * ``secret_headers`` -- optional; a list of ``{"header", "env", "prefix"}``
+      references (Phase 5), injected only from an environment config
 
     The request body is ``scenario.request.payload``:
 
@@ -123,6 +177,7 @@ class HttpAdapter(TargetAdapter):
         headers: Mapping[str, Any] | None = None,
         timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
         evidence_field: str | None = None,
+        secret_headers: "list[tuple[str, str, str]] | None" = None,
     ) -> None:
         scheme = urlsplit(url).scheme.lower()
         if scheme not in _ALLOWED_SCHEMES:
@@ -137,6 +192,16 @@ class HttpAdapter(TargetAdapter):
         }
         self._timeout = float(timeout_seconds)
         self._evidence_field = evidence_field
+        #: (header_name, env_var_name, literal_prefix) triples -- references
+        #: only, no resolved values. Resolved per send in :meth:`send`.
+        self._secret_headers: list[tuple[str, str, str]] = list(secret_headers or [])
+        normal_ci = {name.lower() for name in self._headers}
+        for header_name, _env, _prefix in self._secret_headers:
+            if header_name.lower() in normal_ci:
+                raise AdapterError(
+                    f"http adapter: header {header_name!r} is set both as a normal "
+                    "header and as a secret header"
+                )
 
     @classmethod
     def from_config(cls, config: Mapping[str, Any]) -> "HttpAdapter":
@@ -169,12 +234,14 @@ class HttpAdapter(TargetAdapter):
                 "http adapter: 'evidence_field' must be a string, got "
                 f"{type(evidence_field).__name__}"
             )
+        secret_headers = _parse_secret_header_refs(config.get("secret_headers"))
         return cls(
             url=str(url),
             method=method,
             headers=headers,
             timeout_seconds=timeout,
             evidence_field=evidence_field,
+            secret_headers=secret_headers,
         )
 
     # -- internal ------------------------------------------------------------
@@ -197,6 +264,11 @@ class HttpAdapter(TargetAdapter):
         headers = dict(self._headers)
         if body is not None and is_json and not _has_header(headers, "content-type"):
             headers["Content-Type"] = "application/json"
+        # Resolve secret headers as late as possible. The values live only in
+        # this local ``headers`` dict / the ``Request`` below, plus the local
+        # ``secret_values`` list used for the reflection guard -- never on
+        # ``self``, in a result, or in an exception message.
+        secret_values = self._resolve_secret_headers(headers)
 
         method = self._method or ("POST" if body is not None else "GET")
         req = urllib.request.Request(
@@ -238,9 +310,14 @@ class HttpAdapter(TargetAdapter):
         elapsed_ms = (time.perf_counter() - start) * 1000.0
 
         text = raw.decode("utf-8", errors="replace")
+        parsed = _try_parse_json(text)
+        # Fail closed BEFORE any target-returned material can enter a
+        # NormalizedResult if the target reflected an exact resolved secret.
+        if secret_values:
+            _reject_reflected_secrets(secret_values, text, parsed, resp_headers)
         result = NormalizedResult(
             status=status,
-            body=_try_parse_json(text),
+            body=parsed,
             text=text,
             headers=resp_headers,
             latency_ms=elapsed_ms,
@@ -249,6 +326,26 @@ class HttpAdapter(TargetAdapter):
         return AdapterResponse(
             result=result, evidence=self._extract_evidence(result.body)
         )
+
+    def _resolve_secret_headers(self, headers: dict[str, str]) -> list[str]:
+        """Read each referenced env var from ``os.environ`` and add the header
+        to ``headers`` in place. Fail-closed on unset/empty; the error names
+        the variable, never a value. Returns the resolved (non-empty) secret
+        values for this send only -- used by the reflection guard, never stored."""
+        values: list[str] = []
+        for header_name, env_name, prefix in self._secret_headers:
+            value = os.environ.get(env_name)
+            if value is None:
+                raise AdapterError(
+                    f"required environment variable {env_name!r} is not set"
+                )
+            if value == "":
+                raise AdapterError(
+                    f"required environment variable {env_name!r} is set but empty"
+                )
+            headers[header_name] = f"{prefix}{value}"
+            values.append(value)
+        return values
 
     def _extract_evidence(self, body: Any) -> "EvidenceRecord | None":
         """Optional, portable evidence extraction.
@@ -277,6 +374,38 @@ def _response_headers(message: Any) -> dict[str, str]:
     except AttributeError:  # pragma: no cover - defensive
         return {}
     return {str(k).lower(): str(v) for k, v in items}
+
+
+_REFLECTED_SECRET_MESSAGE = "target response contained a resolved secret value"
+
+
+def _reject_reflected_secrets(
+    secret_values: list[str],
+    text: str,
+    parsed: Any,
+    resp_headers: Mapping[str, str],
+) -> None:
+    """Raise ``AdapterError`` (fixed safe diagnostic) if any *exact* resolved
+    secret value appears in target-returned material: the response body text,
+    the parsed JSON re-serialised, or a response header value.
+
+    The diagnostic never contains the secret, the response, or any header.
+    Detection runs before a ``NormalizedResult`` is built, so contaminated
+    material never reaches a result object.
+    """
+    haystacks: list[str] = [text]
+    if parsed is not None:
+        try:
+            haystacks.append(json.dumps(parsed, ensure_ascii=False, default=str))
+        except (TypeError, ValueError):  # pragma: no cover - defensive
+            pass
+    haystacks.extend(str(v) for v in resp_headers.values())
+    for secret in secret_values:
+        if not secret:  # empty secrets are already rejected upstream
+            continue
+        for hay in haystacks:
+            if secret in hay:
+                raise AdapterError(_REFLECTED_SECRET_MESSAGE)
 
 
 __all__ = ["HttpAdapter"]

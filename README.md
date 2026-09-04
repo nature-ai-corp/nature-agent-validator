@@ -69,9 +69,10 @@ runner/      executes a scenario -> collects result + optional evidence -> judge
 assertions/  deterministic checks; each returns a structured PASS / FAIL / SKIPPED
 evidence/    small, generic, versioned, optional Evidence Contract
 evaluators/  future extension boundary for semantic evaluation (no impl in Phase 0)
-reporting/   ValidationResult: overall_status (PASS / FAIL / ERROR) + details
+reporting/   ValidationResult: overall_status (PASS / FAIL / ERROR) + details; junit.py = CI export
 suite/       ScenarioSuite + SuiteRunner + SuiteResult: batch of scenarios, one Runner per scenario
-cli/         `nav validate <path>` / `nav validate-suite <dir>`  (command surface not yet frozen)
+configuration/ EnvironmentConfig + load_environment + apply_environment: runtime HTTP overrides & secret-header refs
+cli/         `nav validate <path>` / `nav validate-suite <dir>` [--environment FILE]  (command surface not yet frozen)
 ```
 
 Full detail: [`docs/architecture.md`](docs/architecture.md).
@@ -187,18 +188,68 @@ conflicting combination).
 ### Exit codes
 
 `0` = PASS, `1` = FAIL, `2` = ERROR **or** a load error (missing path,
-non-directory, no `.json` files, malformed/invalid scenario) **or** a JUnit
-report-write failure. No other exit codes (argparse itself exits `2` on a bad
-flag combination).
+non-directory, no `.json` files, malformed/invalid scenario, or a malformed
+environment config) **or** a JUnit report-write failure. No other exit codes
+(argparse itself exits `2` on a bad flag combination).
 
-### Phase 3–4 limitations
+## Environments & secret-safe HTTP auth
 
-A suite is only an ordered collection of existing scenarios: no tags,
-filtering, templates, variables, inheritance, or environment profiles.
-Execution is sequential only — no parallelism, retries, or fail-fast. No
-historical result storage, no HTML report, no dashboard, no upload service,
-and no CI-vendor workflow files. JUnit is one explicit reporter, not a plugin
-framework.
+`--environment FILE` (on `validate` and `validate-suite`) applies **runtime
+connection overrides only** to every scenario before it runs. The scenario
+stays the portable validation definition; the environment never changes
+method, payload, expectations, `evidence_field`, or any assertion.
+
+```json
+{
+  "name": "staging",
+  "target": {
+    "url": "https://staging.example.com/chat",
+    "timeout": 10,
+    "headers": { "X-Environment": "staging" },
+    "secret_headers": {
+      "Authorization": { "env": "AGENT_TOKEN", "prefix": "Bearer " }
+    }
+  }
+}
+```
+
+```bash
+export AGENT_TOKEN='…'
+nav validate-suite examples/http --environment examples/environments/staging.json --junit-output validation.xml
+```
+
+- **Explicit JSON, fail-closed.** Required: `name` (non-empty). Optional:
+  `target.url` / `target.timeout` / `target.headers` / `target.secret_headers`.
+  Any unknown field is an error, never ignored.
+- **`url`** is an exact override (no `base_url`, no joining, no `${VAR}`).
+  **`timeout`** reuses the Phase-1 HTTP semantics. **`headers`** overlay the
+  scenario headers; the environment wins for the same name **case-insensitively**
+  (no duplicate semantic headers).
+- **`secret_headers`** hold *references* — `{env, prefix}` — never values.
+  `env` must match `[A-Za-z_][A-Za-z0-9_]*`; `prefix` defaults to `""`. The
+  value is read from `os.environ` immediately before the request and lives only
+  in that one outbound header. It is **never** written to a scenario, a
+  `ValidationResult` / `SuiteResult`, JSON, JUnit, human output, or an error.
+  An **unset or empty** variable is a fail-closed `ERROR` (the message names
+  the variable, never a value).
+- A `secret_headers` / normal-header collision (case-insensitive) is an
+  `ERROR` — the validator never silently picks one.
+- Environment target overrides are **HTTP-only**; applying them to a `static`
+  scenario is an `ERROR`.
+- **No `--environment`** → exactly the pre-Phase-5 behavior.
+- No `.env` files, no dotenv, no cloud secret managers, no OAuth/Basic
+  composition — secrets are injected through the process environment by your
+  shell / CI / container runtime. See
+  [`examples/environments/`](examples/environments/).
+
+### Phase 3–5 limitations
+
+A suite is only an ordered collection of existing scenarios; an environment is
+only runtime connection overrides. No tags, filtering, templates, variable
+interpolation, inheritance, profiles, config registry, auto-discovery, or
+`base_url`. Sequential execution only. No historical result storage, HTML
+report, dashboard, upload service, or CI-vendor workflow files. JUnit is one
+explicit reporter, not a plugin framework.
 
 ## Generic HTTP adapter
 

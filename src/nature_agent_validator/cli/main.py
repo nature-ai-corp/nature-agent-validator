@@ -15,6 +15,12 @@ Exit codes (shared by ``validate`` and ``validate-suite``):
 ``--junit-output FILE`` (JUnit XML to ``FILE`` as UTF-8, human summary still
 on stdout). A successful JUnit export never changes the suite exit code; a
 write failure forces exit ``2``.
+
+``--environment FILE`` (Phase 5) applies runtime HTTP target overrides
+(url / timeout / headers / secret headers) from an explicit JSON file to every
+scenario before it runs; it never changes validation intent. Missing or
+malformed environment configuration is a config ``ERROR`` (exit ``2``).
+Secret values come only from ``os.environ`` and never appear in any output.
 """
 
 from __future__ import annotations
@@ -23,15 +29,16 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Sequence
+from typing import Iterable, Sequence
 
-from nature_agent_validator import __version__
+from nature_agent_validator import __version__, configuration
 from nature_agent_validator.errors import NatureValidatorError
 from nature_agent_validator.reporting import OverallStatus
 from nature_agent_validator.reporting.junit import suite_result_to_junit_xml
 from nature_agent_validator.runner import Runner
+from nature_agent_validator.scenario import Scenario
 from nature_agent_validator.scenario.serialization import load_scenarios
-from nature_agent_validator.suite import SuiteRunner, load_suite
+from nature_agent_validator.suite import ScenarioSuite, SuiteRunner, load_suite
 
 EXIT_OK = 0
 EXIT_FAIL = 1
@@ -61,6 +68,11 @@ def build_parser() -> argparse.ArgumentParser:
         dest="as_json",
         help="emit the full results as JSON instead of a text summary",
     )
+    validate.add_argument(
+        "--environment",
+        metavar="FILE",
+        help="apply runtime HTTP target overrides from an environment JSON file",
+    )
 
     suite = sub.add_parser(
         "validate-suite",
@@ -68,6 +80,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     suite.add_argument(
         "path", help="path to a directory of .json scenario files (not recursive)"
+    )
+    suite.add_argument(
+        "--environment",
+        metavar="FILE",
+        help="apply runtime HTTP target overrides from an environment JSON file",
     )
     # One machine-output mode at a time (argparse rejects conflicts, exit 2).
     suite_out = suite.add_mutually_exclusive_group()
@@ -91,9 +108,21 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _apply_environment(
+    scenarios: Iterable[Scenario], env_path: str
+) -> list[Scenario]:
+    """The single environment-application path shared by ``validate`` and
+    ``validate-suite``: load the config once, apply it to every scenario,
+    returning new effective scenarios (originals untouched)."""
+    env = configuration.load_environment(env_path)
+    return [configuration.apply_environment(s, env) for s in scenarios]
+
+
 def _run_validate(args: argparse.Namespace) -> int:
     try:
         scenarios = load_scenarios(args.path)
+        if args.environment:
+            scenarios = _apply_environment(scenarios, args.environment)
     except NatureValidatorError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_ERROR
@@ -154,6 +183,10 @@ def _exit_code_for(status: OverallStatus) -> int:
 def _run_suite(args: argparse.Namespace) -> int:
     try:
         suite = load_suite(args.path)
+        if args.environment:
+            suite = ScenarioSuite(
+                suite.name, _apply_environment(suite.scenarios, args.environment)
+            )
     except NatureValidatorError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_ERROR

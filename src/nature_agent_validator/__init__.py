@@ -30,6 +30,7 @@ from nature_agent_validator.assertions import (
 from nature_agent_validator.errors import (
     AdapterError,
     AssertionConfigError,
+    ConfigurationError,
     EvidenceError,
     NatureValidatorError,
     ScenarioError,
@@ -60,6 +61,12 @@ from nature_agent_validator.suite import (
     load_suite,
 )
 from nature_agent_validator.reporting.junit import suite_result_to_junit_xml
+from nature_agent_validator.configuration import (
+    EnvironmentConfig,
+    SecretHeaderRef,
+    apply_environment,
+    load_environment,
+)
 
 __version__ = "0.0.1"
 
@@ -103,6 +110,11 @@ __all__ = [
     "load_suite",
     # reporting (Phase 4)
     "suite_result_to_junit_xml",
+    # configuration (Phase 5)
+    "EnvironmentConfig",
+    "SecretHeaderRef",
+    "load_environment",
+    "apply_environment",
     # errors
     "NatureValidatorError",
     "ScenarioError",
@@ -110,4 +122,5 @@ __all__ = [
     "AssertionConfigError",
     "UnknownAssertionType",
     "EvidenceError",
+    "ConfigurationError",
 ]
