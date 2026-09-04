@@ -58,7 +58,14 @@ class RegistryTests(unittest.TestCase):
 
     def test_build_unknown_adapter_raises_adapter_error(self) -> None:
         with self.assertRaises(AdapterError):
+            build_adapter(ScenarioTarget("carrier-pigeon", {}))
+
+    def test_http_is_a_known_adapter_name(self) -> None:
+        # 'http' resolves (lazily); a missing 'url' is a config error, still AdapterError.
+        with self.assertRaises(AdapterError):
             build_adapter(ScenarioTarget("http", {}))
+        adapter = build_adapter(ScenarioTarget("http", {"url": "http://127.0.0.1/x"}))
+        self.assertEqual(adapter.name, "http")
 
 
 if __name__ == "__main__":

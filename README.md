@@ -39,7 +39,7 @@ same engine additionally checks internal behaviour. There is no separate
 
 ```
 scenario/    portable, serializable definition: target + request + expectations
-adapters/    the only components that know how to reach a target (Phase 0: static)
+adapters/    the only components that know how to reach a target (static, http)
 runner/      executes a scenario -> collects result + optional evidence -> judges
 assertions/  deterministic checks; each returns a structured PASS / FAIL / SKIPPED
 evidence/    small, generic, versioned, optional Evidence Contract
@@ -81,8 +81,72 @@ nav validate examples/sales_cannot_read_payroll.json --json
 ```
 
 The `static` adapter ships with Phase 0 and returns canned responses, so the
-examples run with no network and no dependencies. A generic HTTP adapter is
-the first planned addition.
+examples run with no network and no dependencies.
+
+## Generic HTTP adapter
+
+The `http` adapter validates a **real HTTP endpoint** using only the Python
+standard library (`urllib`). It is the first adapter that reaches an external
+target; the runner and the scenario format are unchanged.
+
+```json
+{
+  "target": {
+    "adapter": "http",
+    "config": {
+      "url": "http://127.0.0.1:8080/agent",
+      "method": "POST",
+      "headers": { "X-Request-Source": "example" },
+      "timeout_seconds": 5
+    }
+  },
+  "request": { "payload": { "message": "What is John Smith's salary?" } }
+}
+```
+
+- `url` is required and must be `http://` or `https://`.
+- `method` defaults to `POST` when `request.payload` is present, else `GET`.
+- `request.payload` is the request body: a string/bytes is sent as-is; anything
+  else is JSON-encoded and `Content-Type: application/json` is added when the
+  scenario did not set it.
+- The response is normalized so assertions can check `status_equals`,
+  `contains` / `not_contains`, `regex_match`, `json_path_equals` (parsed JSON
+  body), and `latency_below`.
+
+### PASS vs FAIL vs ERROR
+
+- **PASS** — the endpoint responded and every expectation held.
+- **FAIL** — the endpoint responded, but an expectation did not hold. A `302` /
+  `401` / `403` / `404` / `500` response is a *result*: a scenario may
+  legitimately assert `status_equals: 401` (or `status_equals: 302`) and PASS.
+- **ERROR** — the request could not be completed reliably: connection refused,
+  DNS failure, timeout, unsupported scheme, malformed URL. A transport failure
+  is never reported as a failed assertion.
+
+The `http` adapter is black-box: it exposes no structured evidence, so
+`evidence_*` assertions report `SKIPPED`.
+
+Runnable localhost walk-through: [`examples/http/`](examples/http/).
+
+Import note: `HttpAdapter` lives at
+`nature_agent_validator.adapters.http` and is imported lazily, so importing the
+core package still pulls in no networking module.
+
+```bash
+pip install -e .
+# terminal 1
+python examples/http/demo_server.py
+# terminal 2
+nav validate examples/http/generic_localhost.json --json
+```
+
+### Phase 1 limitations
+
+Static headers only (no auth framework, no secret management). One request per
+scenario. **Automatic HTTP redirects are not followed** — a `3xx` response is
+returned to assertions as-is (assert `status_equals: 302`; read `Location` from
+the normalized response headers). No retries, no streaming, no WebSocket/async.
+No TLS-bypass options.
 
 ## Using it from Python
 

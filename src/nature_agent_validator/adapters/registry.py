@@ -1,15 +1,18 @@
 """Resolve a :class:`ScenarioTarget` to a concrete adapter instance.
 
-Phase 0 has one built-in, declaratively-constructible adapter (``static``),
-held in a private table. There is no public adapter-registration API yet;
-code-driven callers build an adapter themselves and pass it straight to
-``Runner.run(scenario, adapter=...)``. The only supported entry point here is
-the :func:`build_adapter` factory, used by the runner and the CLI.
+Built-in, declaratively-constructible adapters are held in a private table.
+There is no public adapter-registration API; code-driven callers build an
+adapter themselves and pass it straight to ``Runner.run(scenario, adapter=...)``.
+The only supported entry point here is the :func:`build_adapter` factory, used
+by the runner and the CLI.
+
+The ``http`` adapter is resolved lazily (its module imports :mod:`urllib`) so
+that importing the core package never pulls in any networking module.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from nature_agent_validator.errors import AdapterError
 
@@ -24,15 +27,34 @@ _BUILTIN: dict[str, type[TargetAdapter]] = {
 }
 
 
+def _load_http() -> type[TargetAdapter]:
+    from .http import HttpAdapter
+
+    return HttpAdapter
+
+
+#: Names whose implementing class is imported only on first use.
+_LAZY: dict[str, Callable[[], type[TargetAdapter]]] = {
+    "http": _load_http,
+}
+
+
+def _available_names() -> list[str]:
+    return sorted({*_BUILTIN, *_LAZY})
+
+
 def build_adapter(target: "ScenarioTarget") -> TargetAdapter:
     """Factory: build the built-in adapter named by ``target.adapter``."""
-    try:
-        cls = _BUILTIN[target.adapter]
-    except KeyError:
+    name = target.adapter
+    if name in _BUILTIN:
+        cls: type[TargetAdapter] = _BUILTIN[name]
+    elif name in _LAZY:
+        cls = _LAZY[name]()
+    else:
         raise AdapterError(
-            f"adapter {target.adapter!r} is not available in Phase 0 "
-            f"(built-in adapters: {sorted(_BUILTIN)})"
-        ) from None
+            f"adapter {name!r} is not available "
+            f"(built-in adapters: {_available_names()})"
+        )
     return cls.from_config(target.config)
 
 

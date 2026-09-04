@@ -78,7 +78,7 @@ class RunnerTests(unittest.TestCase):
             Scenario(
                 scenario_id="s",
                 name="s",
-                target=ScenarioTarget("http", {}),
+                target=ScenarioTarget("no-such-adapter", {}),
                 request=ScenarioRequest(),
                 expectations=(),
             )

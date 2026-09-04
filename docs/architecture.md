@@ -23,7 +23,7 @@ Package dependency direction (no cycles):
 evidence      (leaf)
 scenario      (leaf; AssertionSpec referenced only for typing)
 evaluators    (leaf; boundary only)
-adapters      -> evidence, scenario
+adapters      -> evidence, scenario  (adapters.http -> urllib, imported lazily only)
 assertions    -> evidence            (adapters referenced only for typing)
 reporting     -> assertions, evidence
 runner        -> adapters, assertions, scenario, reporting, evidence
@@ -58,16 +58,38 @@ The **only** component that knows how to reach a target.
 - `NormalizedResult`: `status`, `body`, `text`, `headers`, `latency_ms`,
   `error`, `raw`. Assertions only ever see this shape, never a transport
   object.
-- `StaticAdapter` (Phase 0): returns a canned response, no I/O. Reference
-  implementation; powers examples, tests, and the CLI.
+- `StaticAdapter` (`static`): returns a canned response, no I/O. Reference
+  implementation; powers the Phase 0 examples, tests, and CLI.
+- `HttpAdapter` (`http`, Phase 1): sends one real HTTP request with the
+  standard library (`urllib.request` / `urllib.error`) and normalizes the
+  response. Config: `url` (required, `http`/`https` only), `method` (defaults
+  to `POST` with a body, else `GET`), `headers` (static), `timeout_seconds`
+  (default `30`). The body is `request.payload` — string/bytes sent as-is,
+  anything else JSON-encoded with an added `Content-Type: application/json`
+  when absent. A completed exchange, **including 3xx/4xx/5xx**, becomes a
+  `NormalizedResult`; a transport failure (connection refused, DNS, timeout,
+  malformed URL, unsupported scheme) raises `AdapterError` → `ERROR`. The
+  adapter exposes no evidence (`evidence=None`). **Redirects are not followed**
+  (Phase 1): a `3xx` is normalized like any response, `Location` kept in
+  `NormalizedResult.headers`; configurable redirect support is a later
+  decision.
 - `registry.py`: a private table mapping an adapter name to a
   declaratively-constructible class, plus the `build_adapter(target)` factory
-  used by the runner and CLI. Only `static` is present in Phase 0; unknown
-  names raise `AdapterError` (surfaced as `ERROR`, not a failed assertion).
-  There is **no** public adapter-registration API in Phase 0.
+  used by the runner and CLI. `static` is in the eager table; `http` is
+  resolved through a lazy loader so that importing the core package pulls in
+  no networking module. Unknown names raise `AdapterError` (surfaced as
+  `ERROR`, not a failed assertion). There is **no** public
+  adapter-registration API.
 
-Planned future adapters — HTTP (first), CLI, local Python callable, WebSocket,
-MCP, other agent systems — implement the same interface with no runner change.
+`HttpAdapter` is intentionally **not** re-exported from
+`nature_agent_validator.adapters` / the top-level package (that would import
+`urllib` at core-import time); use
+`from nature_agent_validator.adapters.http import HttpAdapter`.
+
+Planned future adapters — CLI, local Python callable, WebSocket, MCP, other
+agent systems — implement the same interface with no runner change. The runner
+stays transport-agnostic: it never imports `http`/`urllib` and has no HTTP
+branch.
 
 ## Assertion  (`assertions/`)
 
@@ -169,6 +191,12 @@ human summary; `counts()` the pass/fail/skipped tally.
 merely carries a transport `error` string is still a result: assertions judge
 it (typically `FAIL`), and the run is not `ERROR`.
 
+For the `http` adapter specifically: an HTTP `302` / `401` / `403` / `404` /
+`500` is a completed exchange and therefore a **result** (assert
+`status_equals: 302` or `status_equals: 500` and the run can `PASS`) — the
+adapter does not follow redirects; connection refused, DNS failure, and read
+timeout raise `AdapterError` from `adapter.send` and become **ERROR**.
+
 ## Runner  (`runner/`)
 
 `Runner(adapter_factory=build_adapter)`; `run(scenario, adapter=None)` returns
@@ -182,3 +210,8 @@ caller owns its lifecycle; if the runner built it, the runner closes it.
 via the `build_adapter` factory, prints a text summary or full JSON. Exit
 codes: `0` all passed, `1` some failed, `2` some errored / load failure, `3`
 usage. Command naming is not frozen.
+
+The CLI needed **no changes** for Phase 1: an `http` scenario runs through the
+same `load_scenarios → Runner.run_many → build_adapter` path as a `static`
+one, and both output modes are unchanged. A directory run is non-recursive
+(`*.json`), so `examples/http/` is not picked up by `nav validate examples/`.

@@ -19,3 +19,10 @@ PYTHONPATH=src python -m nature_agent_validator validate examples/
 | --- | --- |
 | `sales_cannot_read_payroll.json` | Evidence-enabled target: visible refusal **and** internal authorization/tool assertions are evaluated. |
 | `sales_cannot_read_payroll_blackbox.json` | Same scenario against a black-box target: evidence assertions report `SKIPPED`, verdict is still `PASS`. |
+
+## HTTP target
+
+[`http/`](http/) validates a **real localhost HTTP endpoint** with the generic
+`http` adapter. It needs a demo server running, so it lives in its own
+subdirectory and is not part of the network-free `nav validate examples/` run.
+See [`http/README.md`](http/README.md).
