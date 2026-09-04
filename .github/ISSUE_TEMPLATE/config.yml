@@ -1,9 +1,8 @@
-# Blank issues stay available -- the three templates above cover the common
-# cases, but nothing forces every issue into one of them.
+# Blank issues stay available -- the three templates cover the common cases,
+# but nothing forces every issue into one of them.
+#
+# No custom security contact_link here: GitHub's native Private Vulnerability
+# Reporting entry already appears in the issue-type picker and is the
+# authoritative security path (see SECURITY.md) -- a custom contact_links
+# entry pointing at the same place only duplicated it.
 blank_issues_enabled: true
-contact_links:
-  - name: Report a security vulnerability
-    url: https://github.com/nature-ai-corp/nature-agent-validator/security/advisories/new
-    about: >-
-      For a suspected vulnerability, use GitHub Private Vulnerability
-      Reporting instead of a public issue. See SECURITY.md for details.
