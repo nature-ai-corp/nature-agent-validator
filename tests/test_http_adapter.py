@@ -125,16 +125,23 @@ class HttpAdapterDirectTests(unittest.TestCase):
         adapter = HttpAdapter.from_config(
             {"url": f"http://127.0.0.1:{port}/echo"}
         )
-        with self.assertRaises(AdapterError):
+        with self.assertRaises(AdapterError) as ctx:
             adapter.send(ScenarioRequest())
+        # The real reason is preserved, plus a short static Alpha 2A hint.
+        message = str(ctx.exception)
+        self.assertIn("failed", message)
+        self.assertIn("reachable from this machine", message)
 
     def test_timeout_raises_adapter_error(self) -> None:
         with LocalHTTPServer() as srv:
             adapter = HttpAdapter.from_config(
                 {"url": srv.url("/slow"), "timeout_seconds": 0.25}
             )
-            with self.assertRaises(AdapterError):
+            with self.assertRaises(AdapterError) as ctx:
                 adapter.send(ScenarioRequest())
+        message = str(ctx.exception)
+        self.assertIn("timed out", message)
+        self.assertIn("timeout_seconds", message)  # Alpha 2A hint
 
     def test_from_config_requires_url(self) -> None:
         with self.assertRaises(AdapterError):
@@ -319,6 +326,65 @@ class HttpAdapterThroughRunnerTests(unittest.TestCase):
         self.assertIs(result.overall_status, OverallStatus.PASS)
         self.assertEqual(result.counts()["skipped"], 1)
         self.assertFalse(result.evidence_summary.available)
+
+
+class TransportErrorHintTests(unittest.TestCase):
+    """Alpha 2A: every transport-failure ``AdapterError`` carries a short,
+    static, type-keyed hint -- selected only by the exception type already
+    being handled, never by inspecting the exception's text, a response
+    body, or a header (see the module docstring in ``adapters/http.py``)."""
+
+    def test_oserror_hint(self) -> None:
+        from unittest import mock
+
+        from nature_agent_validator.adapters import http as http_module
+
+        adapter = HttpAdapter.from_config({"url": "http://127.0.0.1:9/x"})
+        with mock.patch.object(
+            http_module._OPENER, "open", side_effect=OSError("boom")
+        ):
+            with self.assertRaises(AdapterError) as ctx:
+                adapter.send(ScenarioRequest())
+        self.assertIn("reachable from this machine", str(ctx.exception))
+
+    def test_valueerror_hint(self) -> None:
+        from unittest import mock
+
+        from nature_agent_validator.adapters import http as http_module
+
+        adapter = HttpAdapter.from_config({"url": "http://127.0.0.1:9/x"})
+        with mock.patch.object(
+            http_module._OPENER, "open", side_effect=ValueError("bad method")
+        ):
+            with self.assertRaises(AdapterError) as ctx:
+                adapter.send(ScenarioRequest())
+        self.assertIn("target.config", str(ctx.exception))
+
+    def test_hint_never_contains_a_resolved_secret_value(self) -> None:
+        """A transport failure with a secret header configured must not leak
+        the resolved value into the hinted message -- the hint is static
+        text, never built from exception/response/header content."""
+        import os
+        from unittest import mock
+
+        from nature_agent_validator.adapters import http as http_module
+
+        env_name = "NAV_ALPHA2A_HINT_TEST_SECRET"
+        with mock.patch.dict(os.environ, {env_name: "super-secret-value"}):
+            adapter = HttpAdapter.from_config(
+                {
+                    "url": "http://127.0.0.1:9/x",
+                    "secret_headers": [
+                        {"header": "Authorization", "env": env_name, "prefix": "Bearer "}
+                    ],
+                }
+            )
+            with mock.patch.object(
+                http_module._OPENER, "open", side_effect=OSError("boom")
+            ):
+                with self.assertRaises(AdapterError) as ctx:
+                    adapter.send(ScenarioRequest())
+        self.assertNotIn("super-secret-value", str(ctx.exception))
 
 
 if __name__ == "__main__":

@@ -31,7 +31,7 @@ runner        -> adapters, assertions, scenario, reporting, evidence
 suite         -> runner, scenario, scenario.serialization, reporting, errors   (Phase 3)
 reporting.junit -> suite, reporting, assertions.result   (Phase 4; not imported by reporting/__init__)
 configuration -> scenario, errors   (Phase 5; no os.environ read here -- refs only)
-authoring     -> scenario.serialization, adapters(.registry/.result), assertions, errors   (Phase 6; no urllib -- build_adapter's http load stays lazy)
+authoring     -> scenario.serialization, adapters(.registry/.result), assertions, configuration, errors   (Phase 6; environment authoring added Alpha 2A; no urllib -- build_adapter's http load stays lazy)
 cli           -> runner, suite, reporting.junit, configuration, authoring, scenario.serialization, adapters.registry
 ```
 
@@ -80,7 +80,11 @@ The **only** component that knows how to reach a target.
   `Content-Type: application/json` when absent. A completed exchange,
   **including 3xx/4xx/5xx**, becomes a `NormalizedResult`; a transport failure
   (connection refused, DNS, timeout, malformed URL, unsupported scheme) raises
-  `AdapterError` → `ERROR`. **Redirects are not followed** (Phase 1): a `3xx`
+  `AdapterError` → `ERROR`. Each transport-failure message (Alpha 2A) keeps
+  the real underlying reason and appends one short, **static** hint, selected
+  only by the exception type already being handled (`URLError` /
+  `TimeoutError` / `ValueError` / `OSError`) — never by inspecting the
+  exception's text, a response body, or a header. **Redirects are not followed** (Phase 1): a `3xx`
   is normalized like any response, `Location` kept in `NormalizedResult.headers`;
   configurable redirect support is a later decision. Evidence: `None` unless
   `evidence_field` is set and present in the JSON body; malformed → `AdapterError`.
@@ -375,13 +379,18 @@ secret managers.
 Developer UX over the **existing** authoritative Scenario contract — no runtime
 capability, no second schema, no templates/wizard/YAML/JSON-Schema.
 
-- `build_starter_scenario(path)` / `render_starter_scenario(path)` /
-  `init_scenario_file(path)` — one deterministic, minimal, valid **HTTP**
-  starter. `scenario_id` / `name` are derived from the file name as a
-  convenience only (no new identifier rules). The JSON is 2-space-indented,
-  UTF-8, single trailing newline, stable key order, and carries no timestamp,
-  host, user, UUID, environment data, or credential/secret material — just a
-  `http://127.0.0.1:8080/agent` placeholder and two starter assertions.
+- `build_starter_scenario(path, *, url=None, method=None)` /
+  `render_starter_scenario(path, ...)` / `init_scenario_file(path, ...)` — one
+  deterministic, minimal, valid **HTTP** starter. `scenario_id` / `name` are
+  derived from the file name as a convenience only (no new identifier rules).
+  The JSON is 2-space-indented, UTF-8, single trailing newline, stable key
+  order, and carries no timestamp, host, user, UUID, environment data, or
+  credential/secret material — just a `http://127.0.0.1:8080/agent`
+  placeholder and two starter assertions. `url` / `method` (Alpha 2A) are
+  optional keyword-only overrides for the placeholder target; omitting both
+  reproduces the exact prior starter (backward compatible). Neither is
+  independently validated here — the same `build_adapter`-based checks
+  `check_scenario_file` already performs apply to whatever is written.
   `init_scenario_file` **never overwrites** (`open(..., "x")` +
   pre-check → `ScenarioError` → exit `2`); a missing parent dir surfaces as
   `OSError` → exit `2`.
@@ -416,6 +425,38 @@ capability, no second schema, no templates/wizard/YAML/JSON-Schema.
 plugin/registration API. Phase 0's deferral of public `register_*` hooks
 stands.
 
+### Environment authoring  (Alpha 2A)
+
+Mirrors the pattern above exactly, for `EnvironmentConfig` (see "Environment
+configuration" below), and adds **no** new runtime capability of its own:
+
+- `build_starter_environment(path, *, url=None)` / `render_starter_environment(...)`
+  / `init_environment_file(path, ...)` — a deterministic starter with `name`
+  derived from the file stem, a placeholder or given `target.url`,
+  `timeout: 30`, empty `headers`, and one `secret_headers` example
+  (`Authorization` → `{"env": "AGENT_TOKEN", "prefix": "Bearer "}`) — a
+  *reference* (an environment-variable name), never a value, so the generated
+  file contains no credential material. Never overwrites, same mechanism as
+  `init_scenario_file`.
+- `check_environment_file(path) -> list[str]` — calls **only**
+  `configuration.load_environment(path)`, the existing pure, already-proven
+  loader `--environment` uses at runtime. It performs no network access and
+  never reads `os.environ` (it validates secret-header *references*, not
+  values); this wrapper adds no I/O of its own. Empty list = valid; exit `0`
+  / `2`, no exit `1` — same convention as `scenario check`.
+- `describe_environment()` — plain reference text: a concrete example, the
+  field list (`name`, `target.url`, `target.timeout`, `target.headers`,
+  `target.secret_headers`), the authoring workflow, and an explicit
+  authentication note: static `secret_headers` are fully supported; dynamic
+  /session authentication (login → captured token/cookie) is **not**
+  implemented — the documented workaround is an out-of-band login step whose
+  result is exported as the environment variable a `secret_headers` reference
+  names. It also restates that a `401`/`403` is a normal HTTP *result*, not a
+  transport error. This text is not derived from a shared live constant with
+  `configuration` (to avoid reaching into that module's private field-set
+  names); `tests/test_authoring.py` instead round-trips a config using every
+  field the text names through the real loader as a drift guard.
+
 ## CLI  (`cli/`)
 
 `nav validate <file-or-dir> [--json] [--environment FILE]`. Loads `.json`
@@ -448,8 +489,17 @@ one. A directory run is non-recursive (`*.json`), so neither `examples/http/`
 nor `examples/suite/` is picked up by `nav validate examples/`.
 
 `nav scenario <init|check|describe>` (Phase 6) is a third subcommand group that
-delegates straight to `authoring`. `init FILE` and `check FILE` take one
-explicit file path; `describe` takes an optional `assertions` topic. Success is
-exit `0`; any error (existing-file / unwritable path for `init`, any static
-diagnostic for `check`) is exit `2`. `check` has no exit `1`. These commands
-run no scenario and touch no network.
+delegates straight to `authoring`. `init FILE [--url URL] [--method METHOD]`
+(the flags are Alpha 2A, optional, and keyword-only in `authoring`) and
+`check FILE` take one explicit file path; `describe` takes an optional
+`assertions` topic. Success is exit `0`; any error (existing-file / unwritable
+path for `init`, any static diagnostic for `check`) is exit `2`. `check` has
+no exit `1`. These commands run no scenario and touch no network.
+
+`nav environment <init|check|describe>` (Alpha 2A) is a fourth subcommand
+group, mirroring `scenario` exactly for `EnvironmentConfig` files and
+delegating to the same `authoring` module. `init FILE [--url URL]` and
+`check FILE` take one explicit file path; `describe` takes no arguments.
+Same exit-code convention (`0` / `2`, no `1`). `environment check` performs
+no network access and reads no `os.environ` secret value — it calls only
+`configuration.load_environment`.

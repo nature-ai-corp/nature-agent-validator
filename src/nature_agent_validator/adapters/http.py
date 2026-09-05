@@ -47,6 +47,14 @@ contains the secret, the reflected response, or any header.
 
 This module is imported lazily by :func:`nature_agent_validator.adapters.registry.build_adapter`
 so that merely importing the core package pulls in no networking modules.
+
+Transport-error hints (Alpha 2A): each transport-failure ``AdapterError``
+message keeps the real underlying reason and appends one short, **static**
+hint sentence. Hints are selected only by the *exception type* already being
+handled (``URLError`` / ``TimeoutError`` / ``ValueError`` / ``OSError``) --
+never by inspecting or matching the exception's text, a response body, or any
+header -- so they cannot echo target-supplied content or a secret, and their
+wording never depends on platform-specific OS error text.
 """
 
 from __future__ import annotations
@@ -72,6 +80,24 @@ if TYPE_CHECKING:
 _DEFAULT_TIMEOUT_SECONDS = 30.0
 _ALLOWED_SCHEMES = ("http", "https")
 _ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+# Static, type-keyed transport-error hints (Alpha 2A). Never derived from the
+# exception's own text, a response body, or a header -- see module docstring.
+_HINT_URL_ERROR = (
+    "(check the URL's hostname/port and TLS configuration, and that the "
+    "target is reachable from this machine)"
+)
+_HINT_TIMEOUT = (
+    "(the target did not respond in time -- increase 'timeout_seconds' or "
+    "check whether the target is slow or unreachable)"
+)
+_HINT_VALUE_ERROR = (
+    "(check target.config for a malformed method, header, or URL)"
+)
+_HINT_OS_ERROR = (
+    "(check the URL's hostname/port and that the target is reachable from "
+    "this machine)"
+)
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -294,18 +320,22 @@ class HttpAdapter(TargetAdapter):
         except urllib.error.URLError as exc:
             raise AdapterError(
                 f"HTTP request to {self._url!r} failed: {exc.reason}"
+                f" {_HINT_URL_ERROR}"
             ) from exc
         except TimeoutError as exc:
             raise AdapterError(
                 f"HTTP request to {self._url!r} timed out after {self._timeout}s"
+                f" {_HINT_TIMEOUT}"
             ) from exc
         except ValueError as exc:
             raise AdapterError(
                 f"HTTP request to {self._url!r} could not be sent: {exc}"
+                f" {_HINT_VALUE_ERROR}"
             ) from exc
         except OSError as exc:
             raise AdapterError(
                 f"HTTP request to {self._url!r} failed: {exc}"
+                f" {_HINT_OS_ERROR}"
             ) from exc
         elapsed_ms = (time.perf_counter() - start) * 1000.0
 

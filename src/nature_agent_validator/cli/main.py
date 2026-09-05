@@ -13,9 +13,13 @@ Exit codes (shared by ``validate`` and ``validate-suite``):
 The ``scenario`` command group (Phase 6 -- authoring & developer UX) adds no
 runtime capability:
 
-* ``nav scenario init FILE``            -- write a deterministic, minimal, valid
+* ``nav scenario init FILE [--url URL] [--method METHOD]``
+                                          -- write a deterministic, minimal, valid
                                           HTTP starter scenario (never
-                                          overwrites)
+                                          overwrites); the optional flags
+                                          (Alpha 2A) override the placeholder
+                                          target so a real endpoint needs no
+                                          manual JSON editing
 * ``nav scenario check FILE``           -- static validation only, through the
                                           same loader the runner uses; no
                                           network, adapter send, or secret
@@ -24,8 +28,19 @@ runtime capability:
                                           structure
 * ``nav scenario describe assertions``  -- the deterministic assertion catalog
 
+The ``environment`` command group (Alpha 2A) mirrors ``scenario`` exactly for
+EnvironmentConfig files, and adds no runtime capability either:
+
+* ``nav environment init FILE [--url URL]`` -- write a deterministic, minimal,
+                                          valid EnvironmentConfig starter
+                                          (never overwrites)
+* ``nav environment check FILE``        -- static validation only, via
+                                          :func:`nature_agent_validator.configuration.load_environment`;
+                                          no network, no ``os.environ`` read
+* ``nav environment describe``          -- authoring overview + example
+
 These use exit ``0`` on success and exit ``2`` on any error (``check`` has no
-exit ``1``: a scenario is either statically valid or it is not).
+exit ``1``: a scenario/environment is either statically valid or it is not).
 
 ``validate-suite`` output modes are mutually exclusive: default human summary,
 ``--json`` (JSON to stdout), ``--junit`` (JUnit XML **only** to stdout), or
@@ -134,6 +149,16 @@ def build_parser() -> argparse.ArgumentParser:
         "init", help="write a minimal valid HTTP starter scenario (never overwrites)"
     )
     sc_init.add_argument("file", help="destination path for the new scenario file")
+    sc_init.add_argument(
+        "--url",
+        metavar="URL",
+        help="set the starter's target.config.url instead of the localhost placeholder",
+    )
+    sc_init.add_argument(
+        "--method",
+        metavar="METHOD",
+        help="set the starter's target.config.method instead of the default POST",
+    )
     sc_check = scenario_sub.add_parser(
         "check",
         help="statically validate a scenario file -- no agent call, no network",
@@ -150,6 +175,33 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="'assertions' for the deterministic assertion catalog; "
         "omit for the Scenario structure overview",
+    )
+
+    environment = sub.add_parser(
+        "environment",
+        help="author EnvironmentConfig files: starter, static check, reference (Alpha 2A)",
+    )
+    environment_sub = environment.add_subparsers(
+        dest="environment_command", required=True
+    )
+    env_init = environment_sub.add_parser(
+        "init",
+        help="write a minimal valid EnvironmentConfig starter (never overwrites)",
+    )
+    env_init.add_argument("file", help="destination path for the new environment file")
+    env_init.add_argument(
+        "--url",
+        metavar="URL",
+        help="set the starter's target.url instead of the localhost placeholder",
+    )
+    env_check = environment_sub.add_parser(
+        "check",
+        help="statically validate an EnvironmentConfig file -- no network, no secret read",
+    )
+    env_check.add_argument("file", help="path to a .json environment file")
+    environment_sub.add_parser(
+        "describe",
+        help="print an EnvironmentConfig authoring overview and example",
     )
     return parser
 
@@ -281,7 +333,9 @@ def _run_scenario(args: argparse.Namespace) -> int:
 
 def _run_scenario_init(args: argparse.Namespace) -> int:
     try:
-        written = authoring.init_scenario_file(args.file)
+        written = authoring.init_scenario_file(
+            args.file, url=args.url, method=args.method
+        )
     except NatureValidatorError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_ERROR
@@ -319,6 +373,53 @@ def _run_scenario_describe(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _run_environment(args: argparse.Namespace) -> int:
+    if args.environment_command == "init":
+        return _run_environment_init(args)
+    if args.environment_command == "check":
+        return _run_environment_check(args)
+    if args.environment_command == "describe":
+        return _run_environment_describe(args)
+    print(  # pragma: no cover - argparse enforces the choices
+        f"error: unknown environment command {args.environment_command!r}",
+        file=sys.stderr,
+    )
+    return EXIT_ERROR
+
+
+def _run_environment_init(args: argparse.Namespace) -> int:
+    try:
+        written = authoring.init_environment_file(args.file, url=args.url)
+    except NatureValidatorError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    except OSError as exc:
+        print(
+            f"error: could not write starter environment to {args.file!r}: {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+    print(f"wrote starter environment: {written}")
+    print(f"next: nav environment check {written}")
+    return EXIT_OK
+
+
+def _run_environment_check(args: argparse.Namespace) -> int:
+    diagnostics = authoring.check_environment_file(args.file)
+    if diagnostics:
+        print(f"invalid: {args.file}", file=sys.stderr)
+        for line in diagnostics:
+            print(f"  {line}", file=sys.stderr)
+        return EXIT_ERROR
+    print(f"valid: {args.file}")
+    return EXIT_OK
+
+
+def _run_environment_describe(args: argparse.Namespace) -> int:
+    sys.stdout.write(authoring.describe_environment())
+    return EXIT_OK
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -328,6 +429,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_suite(args)
     if args.command == "scenario":
         return _run_scenario(args)
+    if args.command == "environment":
+        return _run_environment(args)
     parser.error(f"unknown command {args.command!r}")  # pragma: no cover
     return EXIT_USAGE  # pragma: no cover
 

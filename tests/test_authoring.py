@@ -26,6 +26,7 @@ from nature_agent_validator import authoring
 from nature_agent_validator.adapters import available_adapter_names
 from nature_agent_validator.assertions import known_assertion_types
 from nature_agent_validator.cli.main import EXIT_ERROR, EXIT_OK, main
+from nature_agent_validator.configuration import load_environment
 from nature_agent_validator.errors import ScenarioError
 from nature_agent_validator.scenario.serialization import load_scenario
 
@@ -390,6 +391,328 @@ class ScenarioCliDispatchTests(unittest.TestCase):
 
     def test_check_missing_file_is_exit_2(self) -> None:
         code, _, err = _run(["scenario", "check", "/no/such/scenario.json"])
+        self.assertEqual(code, EXIT_ERROR)
+        self.assertIn("invalid", err)
+
+
+# --------------------------------------------------------------------------- #
+# Alpha 2A -- `nav scenario init --url/--method`
+# --------------------------------------------------------------------------- #
+
+
+class ScenarioInitUrlMethodTests(unittest.TestCase):
+    def test_omitting_flags_reproduces_prior_starter_exactly(self) -> None:
+        with TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "hello-agent.json"
+            authoring.init_scenario_file(dest)
+            data = json.loads(dest.read_text(encoding="utf-8"))
+        self.assertEqual(
+            data["target"]["config"]["url"], "http://127.0.0.1:8080/agent"
+        )
+        self.assertEqual(data["target"]["config"]["method"], "POST")
+
+    def test_url_override_is_applied_and_still_checks_valid(self) -> None:
+        with TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "agent.json"
+            authoring.init_scenario_file(dest, url="https://agent.example.com/chat")
+            data = json.loads(dest.read_text(encoding="utf-8"))
+            self.assertEqual(
+                data["target"]["config"]["url"], "https://agent.example.com/chat"
+            )
+            self.assertEqual(authoring.check_scenario_file(dest), [])
+
+    def test_method_override_is_applied(self) -> None:
+        with TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "agent.json"
+            authoring.init_scenario_file(dest, method="GET")
+            data = json.loads(dest.read_text(encoding="utf-8"))
+        self.assertEqual(data["target"]["config"]["method"], "GET")
+
+    def test_cli_scenario_init_accepts_url_and_method(self) -> None:
+        with TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "agent.json"
+            code, out, _ = _run(
+                [
+                    "scenario",
+                    "init",
+                    str(dest),
+                    "--url",
+                    "https://agent.example.com/chat",
+                    "--method",
+                    "GET",
+                ]
+            )
+            self.assertEqual(code, EXIT_OK, out)
+            data = json.loads(dest.read_text(encoding="utf-8"))
+        self.assertEqual(
+            data["target"]["config"]["url"], "https://agent.example.com/chat"
+        )
+        self.assertEqual(data["target"]["config"]["method"], "GET")
+
+
+# --------------------------------------------------------------------------- #
+# Alpha 2A -- environment authoring: init
+# --------------------------------------------------------------------------- #
+
+
+class EnvironmentInitTests(unittest.TestCase):
+    def test_init_creates_a_file(self) -> None:
+        with TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "staging.json"
+            code, out, _ = _run(["environment", "init", str(dest)])
+            self.assertEqual(code, EXIT_OK, out)
+            self.assertTrue(dest.is_file())
+
+    def test_generated_file_is_deterministic(self) -> None:
+        with TemporaryDirectory() as a, TemporaryDirectory() as b:
+            pa = Path(a) / "staging.json"
+            pb = Path(b) / "staging.json"
+            authoring.init_environment_file(pa)
+            authoring.init_environment_file(pb)
+            self.assertEqual(pa.read_bytes(), pb.read_bytes())
+            text = pa.read_text(encoding="utf-8")
+            self.assertNotIn("\r", text)
+            self.assertTrue(text.endswith("}\n"))
+            self.assertIn('\n  "name"', text)  # 2-space indent
+
+    def test_generated_file_passes_environment_check(self) -> None:
+        with TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "staging.json"
+            authoring.init_environment_file(dest)
+            self.assertEqual(authoring.check_environment_file(dest), [])
+            code, out, _ = _run(["environment", "check", str(dest)])
+            self.assertEqual(code, EXIT_OK, out)
+
+    def test_generated_file_loads_through_the_authoritative_loader(self) -> None:
+        with TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "staging.json"
+            authoring.init_environment_file(dest)
+            env = load_environment(dest)  # the runtime loader, unchanged
+            self.assertEqual(env.name, "staging")
+            self.assertTrue(env.has_target_overrides)
+
+    def test_second_init_to_same_path_fails_exit_2_and_keeps_contents(self) -> None:
+        with TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "staging.json"
+            authoring.init_environment_file(dest)
+            original = dest.read_bytes()
+            code, _, err = _run(["environment", "init", str(dest)])
+            self.assertEqual(code, EXIT_ERROR)
+            self.assertIn("refusing to overwrite", err)
+            self.assertEqual(dest.read_bytes(), original)
+
+    def test_init_helper_raises_scenario_error_on_existing_file(self) -> None:
+        with TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "x.json"
+            dest.write_text("keep me", encoding="utf-8")
+            with self.assertRaises(ScenarioError):
+                authoring.init_environment_file(dest)
+            self.assertEqual(dest.read_text(encoding="utf-8"), "keep me")
+
+    def test_init_missing_parent_directory_is_exit_2(self) -> None:
+        with TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "no" / "such" / "dir" / "e.json"
+            code, _, err = _run(["environment", "init", str(dest)])
+            self.assertEqual(code, EXIT_ERROR)
+            self.assertIn("could not write", err)
+
+    def test_url_override_is_applied(self) -> None:
+        with TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "staging.json"
+            authoring.init_environment_file(
+                dest, url="https://agent.example.com/chat"
+            )
+            data = json.loads(dest.read_text(encoding="utf-8"))
+        self.assertEqual(data["target"]["url"], "https://agent.example.com/chat")
+
+    def test_generated_config_has_no_real_secret_value(self) -> None:
+        """The only "secret" material is a reference -- an env-var name plus a
+        literal prefix -- never a resolved value."""
+        with TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "staging.json"
+            authoring.init_environment_file(dest)
+            data = json.loads(dest.read_text(encoding="utf-8"))
+        secret = data["target"]["secret_headers"]["Authorization"]
+        self.assertEqual(set(secret), {"env", "prefix"})
+        self.assertRegex(secret["env"], r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+    def test_generated_file_does_not_depend_on_environment_variables(self) -> None:
+        with TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "staging.json"
+            authoring.init_environment_file(dest)
+            with mock.patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(authoring.check_environment_file(dest), [])
+
+
+# --------------------------------------------------------------------------- #
+# Alpha 2A -- environment authoring: check (security acceptance)
+# --------------------------------------------------------------------------- #
+
+
+class EnvironmentCheckSecurityTests(unittest.TestCase):
+    def test_check_does_not_invoke_httpadapter_send(self) -> None:
+        from nature_agent_validator.adapters.http import HttpAdapter
+
+        with TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "staging.json"
+            authoring.init_environment_file(dest)
+            with mock.patch.object(
+                HttpAdapter, "send", side_effect=AssertionError("send called")
+            ) as sent:
+                self.assertEqual(authoring.check_environment_file(dest), [])
+            sent.assert_not_called()
+
+    def test_check_opens_no_socket(self) -> None:
+        with TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "staging.json"
+            authoring.init_environment_file(dest)
+            with mock.patch.object(
+                socket, "socket", side_effect=AssertionError("socket opened")
+            ):
+                self.assertEqual(authoring.check_environment_file(dest), [])
+
+    def test_check_resolves_no_secret_env_var(self) -> None:
+        with TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "staging.json"
+            authoring.init_environment_file(dest)
+            data = json.loads(dest.read_text(encoding="utf-8"))
+            env_name = data["target"]["secret_headers"]["Authorization"]["env"]
+            self.assertNotIn(env_name, os.environ)
+            # An unset secret env var is a *runtime* concern; a static check
+            # must never resolve it, so the config still checks clean.
+            with mock.patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(authoring.check_environment_file(dest), [])
+
+    def test_check_does_not_modify_the_environment_file(self) -> None:
+        with TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "staging.json"
+            authoring.init_environment_file(dest)
+            before = dest.read_bytes()
+            listing = sorted(os.listdir(tmp))
+            authoring.check_environment_file(dest)
+            self.assertEqual(dest.read_bytes(), before)
+            self.assertEqual(sorted(os.listdir(tmp)), listing)  # wrote nothing
+
+    def test_valid_environment_returns_zero_diagnostics(self) -> None:
+        with TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "staging.json"
+            authoring.init_environment_file(dest)
+            self.assertEqual(authoring.check_environment_file(dest), [])
+
+    def test_invalid_environment_returns_diagnostic(self) -> None:
+        with TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "bad.json"
+            dest.write_text(json.dumps({"target": {}}), encoding="utf-8")
+            diags = authoring.check_environment_file(dest)
+            self.assertTrue(diags)
+            self.assertIn("name", diags[0])
+            code, _, err = _run(["environment", "check", str(dest)])
+            self.assertEqual(code, EXIT_ERROR)
+            self.assertIn("invalid", err)
+
+    def test_malformed_json_gives_a_diagnostic(self) -> None:
+        with TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "bad.json"
+            dest.write_text("{ not json", encoding="utf-8")
+            diags = authoring.check_environment_file(dest)
+            self.assertEqual(len(diags), 1)
+            self.assertIn("invalid JSON", diags[0])
+
+    def test_unknown_field_is_clearly_reported(self) -> None:
+        with TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "bad.json"
+            dest.write_text(
+                json.dumps({"name": "x", "bogus": 1}), encoding="utf-8"
+            )
+            diags = authoring.check_environment_file(dest)
+            self.assertEqual(len(diags), 1)
+            self.assertIn("bogus", diags[0])
+
+
+# --------------------------------------------------------------------------- #
+# Alpha 2A -- environment authoring: describe
+# --------------------------------------------------------------------------- #
+
+
+class EnvironmentDescribeTests(unittest.TestCase):
+    def test_describe_succeeds_and_shows_a_concrete_example(self) -> None:
+        code, out, _ = _run(["environment", "describe"])
+        self.assertEqual(code, EXIT_OK)
+        self.assertIn('"secret_headers"', out)
+        self.assertIn('"AGENT_TOKEN"', out)
+
+    def test_describe_mentions_every_load_environment_field(self) -> None:
+        _, out, _ = _run(["environment", "describe"])
+        for field in (
+            "name",
+            "target.url",
+            "target.timeout",
+            "target.headers",
+            "target.secret_headers",
+        ):
+            self.assertIn(field, out, field)
+
+    def test_described_fields_are_jointly_accepted_by_the_authoritative_loader(
+        self,
+    ) -> None:
+        """Drift guard: every field name describe_environment() documents is
+        one load_environment() actually accepts, proven by round-tripping a
+        config that uses all of them -- not by importing configuration's
+        private field-set constants."""
+        with TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "all-fields.json"
+            dest.write_text(
+                json.dumps(
+                    {
+                        "name": "x",
+                        "target": {
+                            "url": "http://127.0.0.1:9/x",
+                            "timeout": 5,
+                            "headers": {"X-Test": "1"},
+                            "secret_headers": {
+                                "Authorization": {
+                                    "env": "X_TOKEN",
+                                    "prefix": "Bearer ",
+                                }
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(authoring.check_environment_file(dest), [])
+
+    def test_describe_states_static_auth_and_401_403_are_results(self) -> None:
+        _, out, _ = _run(["environment", "describe"])
+        self.assertIn("Static authentication", out)
+        self.assertIn("401", out)
+        self.assertIn("403", out)
+        self.assertIn("result", out.lower())
+
+    def test_describe_does_not_claim_dynamic_session_auth_support(self) -> None:
+        _, out, _ = _run(["environment", "describe"])
+        self.assertIn("Not supported", out)
+        self.assertIn("session", out.lower())
+
+
+# --------------------------------------------------------------------------- #
+# Alpha 2A -- `nav environment` CLI dispatch
+# --------------------------------------------------------------------------- #
+
+
+class EnvironmentCliDispatchTests(unittest.TestCase):
+    def test_environment_requires_a_subcommand(self) -> None:
+        with self.assertRaises(SystemExit):
+            _run(["environment"])
+
+    def test_full_first_run_flow(self) -> None:
+        with TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "staging.json"
+            self.assertEqual(_run(["environment", "init", str(dest)])[0], EXIT_OK)
+            self.assertEqual(_run(["environment", "check", str(dest)])[0], EXIT_OK)
+
+    def test_check_missing_file_is_exit_2(self) -> None:
+        code, _, err = _run(["environment", "check", "/no/such/environment.json"])
         self.assertEqual(code, EXIT_ERROR)
         self.assertIn("invalid", err)
 

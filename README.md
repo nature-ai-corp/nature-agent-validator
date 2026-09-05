@@ -99,8 +99,8 @@ evaluators/  future extension boundary for semantic evaluation (no impl in Phase
 reporting/   ValidationResult: overall_status (PASS / FAIL / ERROR) + details; junit.py = CI export
 suite/       ScenarioSuite + SuiteRunner + SuiteResult: batch of scenarios, one Runner per scenario
 configuration/ EnvironmentConfig + load_environment + apply_environment: runtime HTTP overrides & secret-header refs
-cli/         `nav validate <path>` / `nav validate-suite <dir>` [--environment FILE] / `nav scenario init|check|describe`  (command surface not yet frozen)
-authoring/   `nav scenario` helpers: deterministic starter, static check, describe — a thin layer over the existing contract, no runtime capability
+cli/         `nav validate <path>` / `nav validate-suite <dir>` [--environment FILE] / `nav scenario init|check|describe` / `nav environment init|check|describe`  (command surface not yet frozen)
+authoring/   `nav scenario` and `nav environment` helpers: deterministic starters, static checks, describe — a thin layer over the existing contracts, no runtime capability
 ```
 
 Full detail: [`docs/architecture.md`](docs/architecture.md).
@@ -172,16 +172,19 @@ examples run with no network and no dependencies.
 ```bash
 pip install -e .
 
-nav scenario init hello-agent.json      # write a minimal, valid HTTP starter
+nav scenario init hello-agent.json --url https://your-agent.example.com/chat
 nav scenario check hello-agent.json     # static validation — no agent call
-# edit hello-agent.json: set target.config.url and the expectations
+# edit request.payload / expectations to match your Agent
 nav validate hello-agent.json           # run it against the agent
 ```
 
-- **`nav scenario init FILE`** writes one deterministic, minimal, valid HTTP
-  scenario. It never overwrites an existing file (exit `2`), and contains no
-  timestamp, host, user, UUID, or credential/secret material — just a
-  `http://127.0.0.1:8080/agent` placeholder URL and two starter assertions.
+- **`nav scenario init FILE [--url URL] [--method METHOD]`** writes one
+  deterministic, minimal, valid HTTP scenario. It never overwrites an
+  existing file (exit `2`), and contains no timestamp, host, user, UUID, or
+  credential/secret material. Omit the flags and you get a
+  `http://127.0.0.1:8080/agent` placeholder to edit by hand; supply `--url`
+  (and, if not `POST`, `--method`) to point the starter straight at a real
+  endpoint with no manual JSON editing.
 - **`nav scenario check FILE`** validates a scenario file through the *same*
   loader the runner uses, plus the adapter- and assertion-config checks the
   runtime already performs. It makes **no** network request, adapter send, or
@@ -191,12 +194,28 @@ nav validate hello-agent.json           # run it against the agent
   **`nav scenario describe assertions`** prints the deterministic assertion
   catalog (response checks and evidence checks, with the SKIPPED / coverage
   rules).
+- **`nav validate FILE` is also your connectivity check.** A transport
+  failure (no route to host, connection refused, DNS, timeout) is reported as
+  `ERROR` with an actionable hint before you need to think about assertions
+  at all; anything else (including a `401`/`403`/`500`) means the target was
+  reached.
 
 Runtime endpoint, header, and **secret** overrides are *not* part of the
-scenario — supply them separately with `nav validate --environment FILE` (see
-[Environments & secret-safe HTTP auth](#environments--secret-safe-http-auth)).
-**Never store credentials in a scenario JSON file**; secret values come only
-from process environment variables, resolved at request time.
+scenario — supply them separately with `nav validate --environment FILE`, and
+generate that file the same guided way:
+
+```bash
+nav environment init env.json --url https://your-agent.example.com/chat
+nav environment check env.json          # static validation — no network, no secret read
+export AGENT_TOKEN='…'                  # your real secret, set only in the shell/CI
+nav validate hello-agent.json --environment env.json
+```
+
+See [Environments & secret-safe HTTP auth](#environments--secret-safe-http-auth)
+below (and `nav environment describe` for the full field reference).
+**Never store credentials in a scenario or environment JSON file**; secret
+values come only from process environment variables, resolved at request
+time.
 
 ### Authoring diagnostics
 
@@ -305,6 +324,21 @@ connection overrides only** to every scenario before it runs. The scenario
 stays the portable validation definition; the environment never changes
 method, payload, expectations, `evidence_field`, or any assertion.
 
+Generate and check one the same way you author a scenario — no manual schema
+discovery required:
+
+```bash
+nav environment init env.json --url https://staging.example.com/chat
+nav environment check env.json    # static validation — no network, no secret read
+nav environment describe          # full field reference + an example, on demand
+```
+
+`nav environment init` writes a deterministic starter with the shape below
+already filled in (a placeholder endpoint and a `secret_headers` example);
+edit the URL/header names you need, then `export` the real secret in your
+shell before running `validate`. Example (also what `init` generates, in
+substance):
+
 ```json
 {
   "name": "staging",
@@ -347,6 +381,29 @@ nav validate-suite examples/http --environment examples/environments/staging.jso
   composition — secrets are injected through the process environment by your
   shell / CI / container runtime. See
   [`examples/environments/`](examples/environments/).
+
+### What authentication is (and isn't) supported
+
+**Static authentication is fully supported today**: `secret_headers` covers
+any credential sent as a fixed header value — a bearer token, an API key,
+a signed static header — read fresh from `os.environ` for every request and
+never persisted anywhere the Validator writes.
+
+**Dynamic/session authentication is not implemented** — there is no
+built-in way to perform a login request and automatically carry a returned
+token or CSRF cookie into the next request. If your target needs that,
+perform the login yourself (a separate script, a Makefile target, a CI step —
+outside the Validator) and export the resulting value as the environment
+variable a `secret_headers` reference names; the mechanism above then injects
+it exactly like any other bearer token.
+
+**A `401` or `403` response is a normal, completed HTTP *result*, not a
+Validator transport error.** Assert it directly —
+`{ "type": "status_equals", "config": { "value": 403 } }` — the same as any
+other status (see [PASS vs FAIL vs ERROR](#pass-vs-fail-vs-error)). If a
+target instead requires a session/CSRF token before it will respond at all,
+that is the dynamic-authentication case above, not something `nav` retries
+or works around automatically.
 
 ### Phase 3–5 limitations
 

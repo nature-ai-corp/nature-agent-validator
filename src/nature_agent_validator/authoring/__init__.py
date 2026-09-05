@@ -1,23 +1,31 @@
-"""Scenario authoring & developer UX (Phase 6).
+"""Scenario & environment authoring / developer UX (Phase 6; environment
+authoring added in Alpha 2A).
 
-This package adds **no** runtime capability and **no** second scenario schema.
-It is a thin authoring layer over the existing authoritative contract:
+This package adds **no** runtime capability and **no** second scenario or
+environment schema. It is a thin authoring layer over the existing
+authoritative contracts:
 
     authoring UX
         -> nature_agent_validator.scenario.serialization  (load / validate)
         -> nature_agent_validator.adapters.registry        (adapter config shape)
         -> nature_agent_validator.assertions               (assertion dispatch)
+        -> nature_agent_validator.configuration             (environment load / validate)
 
-Three things a first-time developer needs:
+Three things a first-time developer needs, for Scenarios:
 
 * :func:`init_scenario_file` -- write one deterministic, minimal, valid HTTP
-  starter scenario (never overwrites).
+  starter scenario (never overwrites); optional ``url``/``method`` overrides.
 * :func:`check_scenario_file` -- statically validate a scenario file through the
   same loader the runner uses, plus the adapter/assertion config checks the
   runtime already knows -- with **no** network, adapter send, or secret
   resolution.
 * :func:`describe_scenario` / :func:`describe_assertions` -- concise authoring
   reference text derived from the live schema and the live assertion registry.
+
+And the same three for EnvironmentConfig (runtime connection overrides,
+Alpha 2A): :func:`init_environment_file`, :func:`check_environment_file`
+(calls only :func:`~nature_agent_validator.configuration.load_environment` --
+no network, no ``os.environ`` read), and :func:`describe_environment`.
 
 The assertion catalog (:data:`ASSERTION_CATALOG`) is a small immutable metadata
 table. It is not authoritative for *which* types exist -- that is
@@ -43,8 +51,10 @@ from nature_agent_validator.assertions import (
     build_assertion,
     known_assertion_types,
 )
+from nature_agent_validator.configuration import load_environment
 from nature_agent_validator.errors import (
     AdapterError,
+    ConfigurationError,
     NatureValidatorError,
     ScenarioError,
 )
@@ -163,11 +173,21 @@ def _identifiers_from_path(path: Path) -> tuple[str, str]:
     return scenario_id, name
 
 
-def build_starter_scenario(path: Path) -> dict[str, Any]:
+def build_starter_scenario(
+    path: Path, *, url: str | None = None, method: str | None = None
+) -> dict[str, Any]:
     """The canonical starter :class:`Scenario` as a plain dict, ready to be
     serialized with :func:`nature_agent_validator.scenario.serialization`'s
     field vocabulary. Deterministic: no timestamp, host, user, UUID, or
-    environment data; no credential/secret material of any kind."""
+    environment data; no credential/secret material of any kind.
+
+    ``url`` / ``method`` (Alpha 2A) optionally override the placeholder
+    target so a customer who already knows their endpoint doesn't have to
+    hand-edit the generated file. Omitting either preserves the exact prior
+    starter content (backward compatible). Neither is otherwise validated
+    here -- the same checks ``nav scenario check`` already performs (via
+    ``build_adapter``) apply to whatever is written.
+    """
     scenario_id, name = _identifiers_from_path(path)
     return {
         "scenario_id": scenario_id,
@@ -181,8 +201,8 @@ def build_starter_scenario(path: Path) -> dict[str, Any]:
         "target": {
             "adapter": "http",
             "config": {
-                "url": _STARTER_URL,
-                "method": "POST",
+                "url": url if url is not None else _STARTER_URL,
+                "method": method if method is not None else "POST",
                 "timeout_seconds": 30,
             },
         },
@@ -205,24 +225,32 @@ def build_starter_scenario(path: Path) -> dict[str, Any]:
     }
 
 
-def render_starter_scenario(path: Path) -> str:
+def render_starter_scenario(
+    path: Path, *, url: str | None = None, method: str | None = None
+) -> str:
     """The starter scenario as a UTF-8 JSON document: 2-space indent, a single
     trailing newline, deterministic key order, no non-ASCII escaping."""
-    body = build_starter_scenario(path)
+    body = build_starter_scenario(path, url=url, method=method)
     return json.dumps(body, indent=2, ensure_ascii=False) + "\n"
 
 
-def init_scenario_file(path: str | Path) -> Path:
+def init_scenario_file(
+    path: str | Path, *, url: str | None = None, method: str | None = None
+) -> Path:
     """Write a starter scenario to ``path``.
 
     Never overwrites: an existing destination raises :class:`ScenarioError`
     (the caller maps this to exit code 2) and the file is left untouched. A
     missing parent directory or an unwritable path surfaces as :class:`OSError`.
+
+    ``url`` / ``method`` (Alpha 2A): optional overrides for the generated
+    target, so a customer can point the starter at a real endpoint without
+    manual JSON editing. Omitting both reproduces the prior starter exactly.
     """
     p = Path(path)
     if p.exists():
         raise ScenarioError(f"refusing to overwrite existing file: {p}")
-    payload = render_starter_scenario(p)
+    payload = render_starter_scenario(p, url=url, method=method)
     try:
         # "x" fails if the file appears between the check above and here.
         with open(p, "x", encoding="utf-8", newline="\n") as fh:
@@ -433,6 +461,158 @@ def describe_assertions() -> str:
     return "\n".join(parts).rstrip("\n") + "\n"
 
 
+# --------------------------------------------------------------------------- #
+# environment authoring (Alpha 2A)
+#
+# Mirrors the scenario-authoring pattern above exactly: a deterministic
+# starter (never overwrites), a static-only check that reuses the existing
+# authoritative loader (no new validation logic), and describe text. Adds
+# *no* new runtime capability -- `nav environment check` performs no network
+# access and resolves no secret; both guarantees are inherited unchanged from
+# `nature_agent_validator.configuration.load_environment`, which this module
+# only calls, never re-implements.
+# --------------------------------------------------------------------------- #
+
+
+def build_starter_environment(path: Path, *, url: str | None = None) -> dict[str, Any]:
+    """The canonical starter EnvironmentConfig as a plain dict, matching the
+    field vocabulary :func:`nature_agent_validator.configuration.load_environment`
+    accepts. Deterministic; the only "secret" present is a placeholder
+    environment-variable *name* (a reference) -- never a value.
+
+    ``url`` (Alpha 2A) optionally overrides the placeholder target URL.
+    """
+    name = path.stem.strip() or "environment"
+    return {
+        "name": name,
+        "target": {
+            "url": url if url is not None else _STARTER_URL,
+            "timeout": 30,
+            "headers": {},
+            "secret_headers": {
+                "Authorization": {"env": "AGENT_TOKEN", "prefix": "Bearer "}
+            },
+        },
+    }
+
+
+def render_starter_environment(path: Path, *, url: str | None = None) -> str:
+    """The starter EnvironmentConfig as a UTF-8 JSON document: 2-space
+    indent, a single trailing newline, deterministic key order."""
+    body = build_starter_environment(path, url=url)
+    return json.dumps(body, indent=2, ensure_ascii=False) + "\n"
+
+
+def init_environment_file(path: str | Path, *, url: str | None = None) -> Path:
+    """Write a starter EnvironmentConfig to ``path``.
+
+    Never overwrites: an existing destination raises :class:`ScenarioError`
+    (the same exception the CLI already maps to exit code 2 for scenario
+    files) and the file is left untouched. A missing parent directory or an
+    unwritable path surfaces as :class:`OSError`.
+    """
+    p = Path(path)
+    if p.exists():
+        raise ScenarioError(f"refusing to overwrite existing file: {p}")
+    payload = render_starter_environment(p, url=url)
+    try:
+        with open(p, "x", encoding="utf-8", newline="\n") as fh:
+            fh.write(payload)
+    except FileExistsError:
+        raise ScenarioError(f"refusing to overwrite existing file: {p}") from None
+    return p
+
+
+def check_environment_file(path: str | Path) -> list[str]:
+    """Statically validate the EnvironmentConfig at ``path``. Returns a list
+    of diagnostics; an empty list means valid.
+
+    Calls **only** :func:`nature_agent_validator.configuration.load_environment`
+    -- the same pure, already-proven function ``--environment`` uses at
+    runtime. That function performs no network access and never reads
+    ``os.environ`` (it validates secret-header *references* only); this
+    wrapper adds no I/O of its own.
+    """
+    try:
+        load_environment(path)
+    except ConfigurationError as exc:
+        return [str(exc)]
+    return []
+
+
+def describe_environment() -> str:
+    """Concise authoring overview of EnvironmentConfig: the runtime
+    connection-override file supplied via ``nav validate --environment FILE``
+    (also ``nav validate-suite``) -- kept separate from the Scenario itself."""
+    return """\
+NATURE Agent Validator -- Environment configuration
+====================================================
+
+An EnvironmentConfig supplies **runtime connection overrides only** for an
+HTTP target. It never changes what a Scenario validates -- method, payload,
+expectations, and evidence_field are untouched. The same Scenario can run
+against different environments by supplying a different file.
+
+Example
+-------
+  {
+    "name": "staging",
+    "target": {
+      "url": "https://agent.example.com/chat",
+      "timeout": 10,
+      "headers": { "X-Environment": "staging" },
+      "secret_headers": {
+        "Authorization": { "env": "AGENT_TOKEN", "prefix": "Bearer " }
+      }
+    }
+  }
+
+Fields
+------
+  name                    required. Informational identity only.
+  target.url              optional. Exact override -- no base_url, no
+                          joining, no ${VAR} interpolation.
+  target.timeout          optional. Seconds; reuses the HTTP adapter's
+                          timeout semantics.
+  target.headers          optional. Overlaid on the scenario's own headers;
+                          the environment wins for the same name,
+                          case-insensitively.
+  target.secret_headers   optional. { "<Header>": { "env": "<VAR_NAME>",
+                          "prefix": "<literal>" } } -- a *reference* to a
+                          process environment variable, never a value. Read
+                          from os.environ only when a request is actually
+                          sent; never written to a scenario, a result, a
+                          report, or an error message. An unset or empty
+                          variable fails closed at send time.
+
+Authoring workflow
+------------------
+  1. nav environment init  my-env.json      generate a starter file
+  2. nav environment check my-env.json      static validation, no network
+  3. edit target.url / headers / secret_headers as needed
+  4. export <VAR_NAME>=...                  set the real secret value yourself
+  5. nav validate my-scenario.json --environment my-env.json
+
+Static authentication (supported today)
+----------------------------------------
+secret_headers covers static credentials such as "Authorization: Bearer
+<token>" or an API-key header: the value lives only in your shell/CI
+environment, is read fresh for each request, and is never persisted anywhere
+the Validator writes.
+
+Not supported: dynamic/session authentication (an automatic login step that
+captures a token or CSRF cookie for you). If your target requires that,
+perform the login yourself -- a separate script, Makefile target, or CI step
+-- and export the resulting value as the environment variable a
+secret_headers reference names; the mechanism above then injects it exactly
+like any other bearer token.
+
+A target responding 401 or 403 is a normal, completed HTTP *result* -- not a
+Validator transport error. Assert it directly, e.g.
+{ "type": "status_equals", "config": { "value": 403 } }.
+"""
+
+
 __all__ = [
     "AssertionDoc",
     "ASSERTION_CATALOG",
@@ -443,4 +623,9 @@ __all__ = [
     "check_scenario_file",
     "describe_scenario",
     "describe_assertions",
+    "build_starter_environment",
+    "render_starter_environment",
+    "init_environment_file",
+    "check_environment_file",
+    "describe_environment",
 ]
